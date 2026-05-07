@@ -3,10 +3,8 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 use FFMpeg\FFMpeg;
 use FFMpeg\Format\Audio\Mp3;
-use FFMpeg\Coordinate\TimeCode;
 
 class FFmpegService
 {
@@ -16,11 +14,10 @@ class FFmpegService
 
     public function __construct()
     {
-        $this->uploadPath = storage_path('app/public/videos');
-        $this->audioPath = storage_path('app/audio');
+        $this->uploadPath    = storage_path('app/public/videos');
+        $this->audioPath     = storage_path('app/audio');
         $this->processedPath = storage_path('app/public/processed');
 
-        // Ensure directories exist
         foreach ([$this->uploadPath, $this->audioPath, $this->processedPath] as $dir) {
             if (!is_dir($dir)) {
                 mkdir($dir, 0755, true);
@@ -29,7 +26,8 @@ class FFmpegService
     }
 
     /**
-     * Extract audio from video file
+     * Extract and compress audio from video file
+     * ✅ Compresses to mono 16kHz 32kbps to stay under Groq 25MB limit
      */
     public function extractAudio(string $videoFilePath): string
     {
@@ -37,29 +35,38 @@ class FFmpegService
             $audioFileName = pathinfo($videoFilePath, PATHINFO_FILENAME) . '.mp3';
             $audioFilePath = $this->audioPath . '/' . $audioFileName;
 
-            $ffmpeg = FFMpeg::create([
-                'ffmpeg.binaries'  => env('FFMPEG_PATH', 'ffmpeg'),
-                'ffprobe.binaries' => env('FFPROBE_PATH', 'ffprobe'),
-                'timeout'          => 3600,
-                'ffmpeg.threads'   => 12,
-            ]);
+            // ✅ Use ffmpeg directly with compression settings
+            $cmd = sprintf(
+                '%s -i %s -vn -ar 16000 -ac 1 -b:a 32k %s -y',
+                env('FFMPEG_PATH', 'ffmpeg'),
+                escapeshellarg($videoFilePath),
+                escapeshellarg($audioFilePath)
+            );
 
-            $video = $ffmpeg->open($videoFilePath);
+            exec($cmd, $output, $returnCode);
 
-            $format = new Mp3();
+            if ($returnCode !== 0) {
+                throw new \Exception('Audio extraction failed with exit code: ' . $returnCode);
+            }
 
-            $video->save($format, $audioFilePath);
+            if (!file_exists($audioFilePath)) {
+                throw new \Exception('Audio file was not created');
+            }
 
+            // ✅ Log file size for debugging
+            $fileSizeMB = filesize($audioFilePath) / 1024 / 1024;
             Log::info('Audio extracted successfully', [
-                'video_file' => $videoFilePath,
-                'audio_file' => $audioFilePath
+                'video_file'   => $videoFilePath,
+                'audio_file'   => $audioFilePath,
+                'file_size_mb' => round($fileSizeMB, 2),
             ]);
 
             return $audioFilePath;
+
         } catch (\Exception $e) {
             Log::error('Audio extraction failed', [
-                'error' => $e->getMessage(),
-                'video_file' => $videoFilePath
+                'error'      => $e->getMessage(),
+                'video_file' => $videoFilePath,
             ]);
             throw $e;
         }
@@ -88,18 +95,23 @@ class FFmpegService
                 throw new \Exception('FFmpeg merge failed with exit code: ' . $returnCode);
             }
 
+            if (!file_exists($outputFilePath)) {
+                throw new \Exception('Merged video file was not created');
+            }
+
             Log::info('Video merged successfully', [
-                'video_file' => $videoFilePath,
-                'audio_file' => $audioFilePath,
-                'output_file' => $outputFilePath
+                'video_file'  => $videoFilePath,
+                'audio_file'  => $audioFilePath,
+                'output_file' => $outputFilePath,
             ]);
 
             return $outputFilePath;
+
         } catch (\Exception $e) {
             Log::error('Video merge failed', [
-                'error' => $e->getMessage(),
+                'error'      => $e->getMessage(),
                 'video_file' => $videoFilePath,
-                'audio_file' => $audioFilePath
+                'audio_file' => $audioFilePath,
             ]);
             throw $e;
         }
@@ -123,10 +135,11 @@ class FFmpegService
                 ->get('duration');
 
             return (float) $duration;
+
         } catch (\Exception $e) {
             Log::error('Failed to get video duration', [
-                'error' => $e->getMessage(),
-                'video_file' => $videoFilePath
+                'error'      => $e->getMessage(),
+                'video_file' => $videoFilePath,
             ]);
             return 0.0;
         }
@@ -149,6 +162,7 @@ class FFmpegService
                 ->first();
 
             return $format !== null;
+
         } catch (\Exception $e) {
             return false;
         }

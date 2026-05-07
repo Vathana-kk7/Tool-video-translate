@@ -11,63 +11,39 @@ class TTSService
      * Generate Khmer speech using Google Translate TTS (FREE)
      */
     public function generateSpeech(string $text, string $outputPath): string
-    {
-        try {
-            // Split text into chunks (Google TTS max 200 chars)
-            $chunks = $this->splitText($text, 200);
-            $tempFiles = [];
+{
+    try {
+        // optional: clean text
+        $text = addslashes($text);
 
-            foreach ($chunks as $index => $chunk) {
-                $tempFile = $outputPath . '_part_' . $index . '.mp3';
+        $cmd = sprintf(
+            'python -m edge_tts --text "%s" --voice en-US-AriaNeural --write-media "%s"',
+            $text,
+            $outputPath
+        );
 
-                $url = 'https://translate.google.com/translate_tts';
-                $response = Http::withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Referer'    => 'https://translate.google.com/',
-                ])->get($url, [
-                    'ie'     => 'UTF-8',
-                    'q'      => $chunk,
-                    'tl'     => 'km',
-                    'client' => 'tw-ob',
-                ]);
+        exec($cmd, $output, $status);
 
-                if (!$response->successful()) {
-                    throw new \Exception('Google TTS error: ' . $response->status());
-                }
-
-                file_put_contents($tempFile, $response->body());
-                $tempFiles[] = $tempFile;
-
-                // Small delay to avoid rate limiting
-                usleep(300000); // 0.3 seconds
-            }
-
-            // Merge all parts if multiple chunks
-            if (count($tempFiles) === 1) {
-                rename($tempFiles[0], $outputPath);
-            } else {
-                $this->mergeAudioFiles($tempFiles, $outputPath);
-                foreach ($tempFiles as $tempFile) {
-                    if (file_exists($tempFile)) unlink($tempFile);
-                }
-            }
-
-            Log::info('TTS generation completed', [
-                'text_length' => strlen($text),
-                'output_file' => $outputPath,
-                'chunks'      => count($chunks),
-            ]);
-
-            return $outputPath;
-
-        } catch (\Exception $e) {
-            Log::error('TTS generation failed', [
-                'error' => $e->getMessage(),
-                'text'  => substr($text, 0, 100),
-            ]);
-            throw $e;
+        if ($status !== 0 || !file_exists($outputPath)) {
+            throw new \Exception("Edge TTS failed to generate audio");
         }
+
+        Log::info('Edge TTS success', [
+            'output' => $outputPath,
+            'text_length' => strlen($text),
+        ]);
+
+        return $outputPath;
+
+    } catch (\Exception $e) {
+        Log::error('TTS failed', [
+            'error' => $e->getMessage(),
+            'text' => substr($text, 0, 100),
+        ]);
+
+        throw $e;
     }
+}
 
     /**
      * Split text into chunks
@@ -78,8 +54,8 @@ class TTSService
             return [$text];
         }
 
-        $chunks = [];
-        $words  = explode(' ', $text);
+        $chunks  = [];
+        $words   = explode(' ', $text);
         $current = '';
 
         foreach ($words as $word) {
@@ -99,27 +75,35 @@ class TTSService
     /**
      * Merge multiple mp3 files using FFmpeg
      */
-    private function mergeAudioFiles(array $files, string $outputPath): void
-    {
-        $listFile = $outputPath . '_list.txt';
-        $content  = '';
+   private function mergeAudioFiles(array $files, string $outputPath): void
+{
+    $listFile = $outputPath . '_list.txt';
+    $content  = '';
 
-        foreach ($files as $file) {
-            $content .= "file '" . $file . "'\n";
-        }
-
-        file_put_contents($listFile, $content);
-
-        $cmd = sprintf(
-            '%s -f concat -safe 0 -i %s -c copy %s -y 2>/dev/null',
-            env('FFMPEG_PATH', 'ffmpeg'),
-            escapeshellarg($listFile),
-            escapeshellarg($outputPath)
-        );
-
-        exec($cmd);
-        if (file_exists($listFile)) unlink($listFile);
+    foreach ($files as $file) {
+        $content .= "file '" . str_replace('\\', '/', $file) . "'\n";
     }
+
+    file_put_contents($listFile, $content);
+
+    $ffmpeg = env('FFMPEG_PATH', 'ffmpeg');
+
+    // ✅ Windows compatible (លប់ 2>/dev/null ចោល)
+    $cmd = sprintf(
+        '"%s" -f concat -safe 0 -i "%s" -c copy "%s" -y',
+        $ffmpeg,
+        $listFile,
+        $outputPath
+    );
+
+    exec($cmd, $output, $returnCode);
+
+    if (file_exists($listFile)) unlink($listFile);
+
+    if ($returnCode !== 0 || !file_exists($outputPath)) {
+        throw new \Exception('Failed to merge audio files');
+    }
+}
 
     /**
      * Batch generate TTS segments
