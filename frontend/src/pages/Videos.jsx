@@ -17,7 +17,21 @@ const Videos = () => {
   const fetchVideos = async () => {
     try {
       const response = await videoService.getAllVideos()
-      setVideos(response.data || [])
+      const payload = response?.data
+
+      // API may return either:
+      // - an array: [ ... ]
+      // - { data: [ ... ] }
+      // - a single object: { ... }
+      const normalized = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : payload
+            ? [payload]
+            : []
+
+      setVideos(normalized)
     } catch (err) {
       setError(err.message || 'Failed to load videos')
     } finally {
@@ -151,7 +165,7 @@ const Videos = () => {
               <div key={video.id} className="card hover:shadow-lg transition-shadow duration-300">
                 {/* Video Thumbnail */}
                 <div className="mb-4">
-                  <VideoPreview 
+                  <VideoPreview
                     videoUrl={video.final_video_url || video.original_video_url}
                     title={`Video #${video.id}`}
                     controls={false}
@@ -175,7 +189,7 @@ const Videos = () => {
                   {/* Progress Bar (if processing) */}
                   {video.status !== 'completed' && video.status !== 'failed' && (
                     <div className="progress-bar h-2">
-                      <div 
+                      <div
                         className="progress-bar-fill"
                         style={{ width: `${video.progress}%` }}
                       />
@@ -192,7 +206,7 @@ const Videos = () => {
                       <span>View</span>
                     </Link>
                     {video.status === 'completed' && (
-                      <DownloadButton 
+                      <DownloadButton
                         videoId={video.id}
                         videoUrl={video.final_video_url}
                         variant="secondary"
