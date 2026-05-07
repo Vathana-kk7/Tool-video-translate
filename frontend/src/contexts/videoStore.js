@@ -43,22 +43,23 @@ const useVideoStore = create((set, get) => ({
       })
       
       const response = await videoService.uploadVideo(file)
+      const responseData = response.data?.data ?? response.data ?? response
       
       set({ 
         status: 'processing',
         uploadProgress: 100,
         currentVideo: {
-          id: response.data.video_id,
-          status: response.data.status,
+          id: responseData.video_id,
+          status: responseData.status,
         }
       })
       
       toast.success('Video uploaded successfully!')
       
       // Start polling for status
-      get().pollVideoStatus(response.data.video_id)
+      get().pollVideoStatus(responseData.video_id)
       
-      return response.data.video_id
+      return responseData.video_id
     } catch (error) {
       const errorMessage = error.response?.data?.message || 'Upload failed. Please try again.'
       set({ 
@@ -76,8 +77,9 @@ const useVideoStore = create((set, get) => ({
     const poll = async () => {
       try {
         const response = await videoService.getStatus(videoId)
-        const status = response.data.status
-        const progress = response.data.progress
+        const responseData = response.data?.data ?? response.data ?? response
+        const status = responseData.status
+        const progress = responseData.progress
         
         set({ 
           processingProgress: progress,
@@ -98,7 +100,7 @@ const useVideoStore = create((set, get) => ({
         if (status === 'failed') {
           set({ 
             status: 'failed',
-            error: response.data.error_message || 'Processing failed'
+            error: responseData.error_message || 'Processing failed'
           })
           toast.error('Video processing failed')
           return
@@ -128,7 +130,16 @@ const useVideoStore = create((set, get) => ({
   async loadVideoDetails(videoId) {
     try {
       const response = await videoService.getVideo(videoId)
-      set({ videoDetails: response.data })
+      const responseData = response.data?.data ?? response.data ?? response
+      set({ 
+        videoDetails: responseData,
+        status: responseData.status,
+        currentVideo: {
+          id: responseData.id,
+          status: responseData.status,
+          progress: responseData.progress,
+        },
+      })
     } catch (error) {
       console.error('Failed to load video details:', error)
     }
@@ -137,7 +148,8 @@ const useVideoStore = create((set, get) => ({
   async downloadVideo(videoId) {
     try {
       const response = await videoService.getDownloadUrl(videoId)
-      const blob = new Blob([response.data], { type: 'video/mp4' })
+      const responseData = response.data ?? response
+      const blob = new Blob([responseData], { type: 'video/mp4' })
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url

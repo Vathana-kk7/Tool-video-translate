@@ -1,11 +1,11 @@
 import { ArrowDownTrayIcon, PlayIcon } from '@heroicons/react/24/outline'
 import useVideoStore from '../contexts/videoStore'
 
-const DownloadButton = ({ videoUrl, videoId, variant = 'primary' }) => {
+const DownloadButton = ({ videoUrl, videoId, variant = 'primary', disabled = false }) => {
   const { downloadVideo, status } = useVideoStore()
 
   const handleDownload = async () => {
-    if (videoId) {
+    if (videoId && !disabled) {
       try {
         await downloadVideo(videoId)
       } catch (error) {
@@ -14,7 +14,7 @@ const DownloadButton = ({ videoUrl, videoId, variant = 'primary' }) => {
     }
   }
 
-  const isDisabled = !videoUrl && !videoId
+  const isDisabled = disabled || (!videoUrl && !videoId)
 
   const baseClasses = "inline-flex items-center justify-center space-x-2 px-6 py-3 font-semibold rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
 
@@ -37,30 +37,30 @@ const DownloadButton = ({ videoUrl, videoId, variant = 'primary' }) => {
     )
   }
 
-  return (
-    <a
-      href={videoUrl}
-      download
-      className={`${baseClasses} ${variantClasses[variant]} inline-block`}
-      onClick={(e) => {
-        if (!videoUrl) {
-          e.preventDefault()
-        }
-      }}
-    >
-      {status === 'processing' ? (
-        <>
-          <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          <span>Processing...</span>
-        </>
-      ) : (
-        <>
-          <ArrowDownTrayIcon className="w-5 h-5" />
-          <span>Download</span>
-        </>
-      )}
-    </a>
-  )
+   return (
+     <a
+       href={videoUrl}
+       download
+       className={`${baseClasses} ${variantClasses[variant]} inline-block ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+       onClick={(e) => {
+         if (isDisabled || !videoUrl) {
+           e.preventDefault()
+         }
+       }}
+     >
+       {status === 'processing' ? (
+         <>
+           <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+           <span>Processing...</span>
+         </>
+       ) : (
+         <>
+           <ArrowDownTrayIcon className="w-5 h-5" />
+           <span>Download</span>
+         </>
+       )}
+     </a>
+   )
 }
 
 export default DownloadButton

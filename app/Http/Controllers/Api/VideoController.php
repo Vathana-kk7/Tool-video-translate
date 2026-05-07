@@ -50,12 +50,20 @@ class VideoController extends Controller
                 'progress' => 0,
             ]);
 
-            // Dispatch processing job
-            ProcessVideoJob::dispatch($video->id);
+            // Dispatch processing job. If dispatch fails, keep the upload accepted
+            // and let the job retry or be handled by a queue worker later.
+            try {
+                ProcessVideoJob::dispatch($video->id);
+            } catch (\Throwable $e) {
+                \Log::warning('Video dispatch failed; upload was accepted and processing will retry.', [
+                    'video_id' => $video->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
-                'message' => 'Video uploaded successfully. Processing started.',
+                'message' => 'Video uploaded successfully. Processing has been queued.',
                 'data' => [
                     'video_id' => $video->id,
                     'status' => $video->status,

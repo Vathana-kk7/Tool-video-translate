@@ -1,4 +1,5 @@
-<?php
+cd D:\laravel_php\tool_ai
+Get-Content storage\logs\laravel.log -Tail 100<?php
 
 namespace Tests\Feature;
 

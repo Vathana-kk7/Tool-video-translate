@@ -5,8 +5,9 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
-    'Content-Type': 'application/json',
+    'Accept': 'application/json',
   },
+  timeout: 3600000, // 1 hour for large video uploads
 })
 
 // Request interceptor
@@ -16,6 +17,12 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
+
+    if (config.data instanceof FormData) {
+      // Let the browser set the correct multipart boundary header for FormData.
+      delete config.headers['Content-Type']
+    }
+
     return config
   },
   (error) => {
@@ -26,7 +33,7 @@ api.interceptors.request.use(
 // Response interceptor
 api.interceptors.response.use(
   (response) => {
-    return response.data
+    return response
   },
   (error) => {
     if (error.response?.status === 401) {

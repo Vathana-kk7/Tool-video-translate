@@ -60,7 +60,9 @@ const Result = () => {
     )
   }
 
-  const isProcessing = status === 'processing' || status === 'uploading'
+  const isProcessing = ['uploading', 'processing', 'extracting_audio', 'transcribing', 'translating', 'generating_tts', 'merging'].includes(videoDetails?.status)
+
+  const downloadDisabled = videoDetails?.status !== 'completed' || !videoDetails?.final_video_url
 
   return (
     <div className="min-h-screen bg-gray-50 py-12">
@@ -174,6 +176,7 @@ const Result = () => {
                   <DownloadButton 
                     videoId={videoDetails.id}
                     variant="success"
+                    disabled={downloadDisabled}
                   />
                   
                   <div className="flex space-x-3">

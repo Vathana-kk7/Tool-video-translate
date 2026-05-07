@@ -4,127 +4,121 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class TTSService
 {
-    protected string $apiKey;
-    protected string $region;
-    protected string $endpoint;
-
-    public function __construct()
-    {
-        $this->apiKey = env('AZURE_TTS_KEY');
-        $this->region = env('AZURE_TTS_REGION', 'eastasia');
-        $this->endpoint = sprintf(
-            'https://%s.tts.speech.microsoft.com/cognitiveservices/v1',
-            $this->region
-        );
-    }
-
     /**
-     * Generate speech from Khmer text using Azure TTS
+     * Generate Khmer speech using Google Translate TTS (FREE)
      */
     public function generateSpeech(string $text, string $outputPath): string
     {
         try {
-            $ssml = $this->createSSML($text);
+            // Split text into chunks (Google TTS max 200 chars)
+            $chunks = $this->splitText($text, 200);
+            $tempFiles = [];
 
-            $response = Http::withHeaders([
-                'Ocp-Apim-Subscription-Key' => $this->apiKey,
-                'Content-Type' => 'application/ssml+xml',
-                'X-Microsoft-OutputFormat' => 'audio-16khz-128kbitrate-mono-mp3',
-            ])->withBody($ssml, 'application/ssml+xml')
-              ->post($this->endpoint);
+            foreach ($chunks as $index => $chunk) {
+                $tempFile = $outputPath . '_part_' . $index . '.mp3';
 
-            if (!$response->successful()) {
-                throw new \Exception('Azure TTS API error: ' . $response->body());
+                $url = 'https://translate.google.com/translate_tts';
+                $response = Http::withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer'    => 'https://translate.google.com/',
+                ])->get($url, [
+                    'ie'     => 'UTF-8',
+                    'q'      => $chunk,
+                    'tl'     => 'km',
+                    'client' => 'tw-ob',
+                ]);
+
+                if (!$response->successful()) {
+                    throw new \Exception('Google TTS error: ' . $response->status());
+                }
+
+                file_put_contents($tempFile, $response->body());
+                $tempFiles[] = $tempFile;
+
+                // Small delay to avoid rate limiting
+                usleep(300000); // 0.3 seconds
             }
 
-            file_put_contents($outputPath, $response->body());
+            // Merge all parts if multiple chunks
+            if (count($tempFiles) === 1) {
+                rename($tempFiles[0], $outputPath);
+            } else {
+                $this->mergeAudioFiles($tempFiles, $outputPath);
+                foreach ($tempFiles as $tempFile) {
+                    if (file_exists($tempFile)) unlink($tempFile);
+                }
+            }
 
             Log::info('TTS generation completed', [
                 'text_length' => strlen($text),
-                'output_file' => $outputPath
+                'output_file' => $outputPath,
+                'chunks'      => count($chunks),
             ]);
 
             return $outputPath;
+
         } catch (\Exception $e) {
             Log::error('TTS generation failed', [
                 'error' => $e->getMessage(),
-                'text' => substr($text, 0, 100)
+                'text'  => substr($text, 0, 100),
             ]);
             throw $e;
         }
     }
 
     /**
-     * Create SSML for Khmer language
+     * Split text into chunks
      */
-    private function createSSML(string $text): string
+    private function splitText(string $text, int $maxLength): array
     {
-        return <<<XML
-<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="km-KH">
-    <voice name="km-KH-SreymomNeural">
-        <prosody rate="medium" pitch="medium">
-            {$text}
-        </prosody>
-    </voice>
-</speak>
-XML;
-    }
+        if (strlen($text) <= $maxLength) {
+            return [$text];
+        }
 
-    /**
-     * Generate speech using Edge TTS as fallback
-     */
-    public function generateSpeechEdgeTTS(string $text, string $outputPath): string
-    {
-        try {
-            $edgeTtsUrl = 'https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edges/v1';
+        $chunks = [];
+        $words  = explode(' ', $text);
+        $current = '';
 
-            $ssml = $this->createEdgeSSML($text);
-
-            $response = Http::withHeaders([
-                'Content-Type' => 'application/ssml+xml',
-                'X-Microsoft-OutputFormat' => 'audio-16khz-128kbitrate-mono-mp3',
-            ])->withBody($ssml, 'application/ssml+xml')
-              ->post($edgeTtsUrl);
-
-            if (!$response->successful()) {
-                throw new \Exception('Edge TTS API error: ' . $response->body());
+        foreach ($words as $word) {
+            if (strlen($current . ' ' . $word) <= $maxLength) {
+                $current .= ($current ? ' ' : '') . $word;
+            } else {
+                if ($current) $chunks[] = $current;
+                $current = $word;
             }
-
-            file_put_contents($outputPath, $response->body());
-
-            Log::info('Edge TTS generation completed', [
-                'text_length' => strlen($text),
-                'output_file' => $outputPath
-            ]);
-
-            return $outputPath;
-        } catch (\Exception $e) {
-            Log::error('Edge TTS generation failed', [
-                'error' => $e->getMessage(),
-                'text' => substr($text, 0, 100)
-            ]);
-            throw $e;
         }
+
+        if ($current) $chunks[] = $current;
+
+        return $chunks;
     }
 
     /**
-     * Create SSML for Edge TTS
+     * Merge multiple mp3 files using FFmpeg
      */
-    private function createEdgeSSML(string $text): string
+    private function mergeAudioFiles(array $files, string $outputPath): void
     {
-        return <<<XML
-<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="km-KH">
-    <voice name="Microsoft Speech Server - Khmer (Cambodia)">
-        <mstts:express-as style="general">
-            {$text}
-        </mstts:express-as>
-    </voice>
-</speak>
-XML;
+        $listFile = $outputPath . '_list.txt';
+        $content  = '';
+
+        foreach ($files as $file) {
+            $content .= "file '" . $file . "'\n";
+        }
+
+        file_put_contents($listFile, $content);
+
+        $cmd = sprintf(
+            '%s -f concat -safe 0 -i %s -c copy %s -y 2>/dev/null',
+            env('FFMPEG_PATH', 'ffmpeg'),
+            escapeshellarg($listFile),
+            escapeshellarg($outputPath)
+        );
+
+        exec($cmd);
+        if (file_exists($listFile)) unlink($listFile);
     }
 
     /**
@@ -140,16 +134,15 @@ XML;
             try {
                 $this->generateSpeech($segment['translated'], $outputFile);
                 $audioFiles[] = [
-                    'file' => $outputFile,
+                    'file'       => $outputFile,
                     'start_time' => $segment['start_time'] ?? 0,
-                    'end_time' => $segment['end_time'] ?? 0,
-                    'text' => $segment['translated'],
+                    'end_time'   => $segment['end_time'] ?? 0,
+                    'text'       => $segment['translated'],
                 ];
             } catch (\Exception $e) {
                 Log::error('Failed to generate TTS for segment', [
                     'index' => $index,
-                    'segment' => $segment,
-                    'error' => $e->getMessage()
+                    'error' => $e->getMessage(),
                 ]);
             }
         }

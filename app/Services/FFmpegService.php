@@ -5,6 +5,7 @@ namespace App\Services;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use FFMpeg\FFMpeg;
+use FFMpeg\Format\Audio\Mp3;
 use FFMpeg\Coordinate\TimeCode;
 
 class FFmpegService
@@ -45,8 +46,7 @@ class FFmpegService
 
             $video = $ffmpeg->open($videoFilePath);
 
-            $format = new FFMpeg\Format\Audio\MP3();
-            $format->setAudioCodec('libmp3lame');
+            $format = new Mp3();
 
             $video->save($format, $audioFilePath);
 

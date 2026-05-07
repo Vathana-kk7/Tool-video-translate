@@ -13,30 +13,45 @@ class WhisperService
 
     public function __construct()
     {
-        $this->apiKey = env('OPENAI_API_KEY');
-        $this->apiUrl = 'https://api.openai.com/v1/audio/transcriptions';
+        $this->apiKey = env('GROQ_API_KEY'); // ✅ Groq
+        $this->apiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions'; // ✅ Groq
     }
 
-    /**
-     * Transcribe audio using OpenAI Whisper API
-     */
     public function transcribe(string $audioFilePath, string $language = 'zh'): array
     {
         try {
+            // Validate that the file is an audio file before sending to API
+            if (!file_exists($audioFilePath) || !is_readable($audioFilePath)) {
+                throw new \Exception("Audio file not found or not readable: {$audioFilePath}");
+            }
+
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mimeType = finfo_file($finfo, $audioFilePath);
+            finfo_close($finfo);
+
+            // Allow common audio MIME types; some files may be detected as application/octet-stream
+            $allowedAudioTypes = [
+                'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/ogg',
+                'audio/flac', 'audio/mp4', 'audio/x-m4a', 'audio/aac',
+                'application/octet-stream' // fallback for unknown binary audio
+            ];
+
+            if (!in_array($mimeType, $allowedAudioTypes) && strpos($mimeType, 'audio/') !== 0) {
+                throw new \Exception("Invalid file type: {$mimeType}. Only audio files are supported for transcription.");
+            }
+
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $this->apiKey,
             ])->attach(
                 'file',
                 file_get_contents($audioFilePath),
                 'audio.mp3'
-            )->withOptions([
-                'multipart' => [
-                    'model' => 'whisper-1',
-                    'language' => $language,
-                    'response_format' => 'verbose_json',
-                    'temperature' => 0,
-                ],
-            ])->post($this->apiUrl);
+            )->post($this->apiUrl, [
+                'model' => 'whisper-large-v3-turbo', // ✅ Groq model
+                'language' => $language,
+                'response_format' => 'verbose_json',
+                'temperature' => 0,
+            ]);
 
             if (!$response->successful()) {
                 throw new \Exception('Whisper API error: ' . $response->body());
@@ -64,14 +79,10 @@ class WhisperService
         }
     }
 
-    /**
-     * Transcribe and split into sentences
-     */
     public function transcribeWithSegments(string $audioFilePath): array
     {
         $result = $this->transcribe($audioFilePath, 'zh');
 
-        // Split text into sentences for better translation
         $sentences = $this->splitIntoSentences($result['text']);
 
         return [
@@ -81,12 +92,8 @@ class WhisperService
         ];
     }
 
-    /**
-     * Split Chinese text into sentences
-     */
     private function splitIntoSentences(string $text): array
     {
-        // Split by Chinese punctuation marks
         $pattern = '/(?<=[。！？；])/u';
         $sentences = preg_split($pattern, $text, -1, PREG_SPLIT_NO_EMPTY);
 

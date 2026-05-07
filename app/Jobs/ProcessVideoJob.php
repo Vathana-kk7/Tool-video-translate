@@ -4,6 +4,8 @@ namespace App\Jobs;
 
 use App\Models\Video;
 use App\Services\FFmpegService;
+use App\Services\TranslateService;
+use App\Services\TTSService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -17,7 +19,7 @@ class ProcessVideoJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $tries = 3;
-    public $timeout = 3600; // 1 hour
+    public $timeout = 3600;
     public $backoff = 60;
 
     public function __construct(
@@ -29,22 +31,12 @@ class ProcessVideoJob implements ShouldQueue
         $video = Video::findOrFail($this->videoId);
 
         try {
-            // Step 1: Extract Audio
             $this->extractAudio($video);
-
-            // Step 2: Transcribe Audio
             $this->transcribeAudio($video);
-
-            // Step 3: Translate Text
             $this->translateText($video);
-
-            // Step 4: Generate TTS
             $this->generateTTS($video);
-
-            // Step 5: Merge Video
             $this->mergeVideo($video);
 
-            // Mark as completed
             $video->update([
                 'status' => 'completed',
                 'progress' => 100,
@@ -71,10 +63,7 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function extractAudio(Video $video): void
     {
-        $video->update([
-            'status' => 'extracting_audio',
-            'progress' => 10,
-        ]);
+        $video->update(['status' => 'extracting_audio', 'progress' => 10]);
 
         $ffmpegService = new FFmpegService();
         $originalPath = storage_path('app/public/' . $video->original_video);
@@ -84,7 +73,6 @@ class ProcessVideoJob implements ShouldQueue
         }
 
         $audioPath = $ffmpegService->extractAudio($originalPath);
-
         $relativeAudioPath = str_replace(storage_path('app/'), '', $audioPath);
 
         $video->update([
@@ -96,10 +84,7 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function transcribeAudio(Video $video): void
     {
-        $video->update([
-            'status' => 'transcribing',
-            'progress' => 30,
-        ]);
+        $video->update(['status' => 'transcribing', 'progress' => 30]);
 
         $whisperService = new \App\Services\WhisperService();
         $audioPath = storage_path('app/' . $video->extracted_audio);
@@ -112,44 +97,31 @@ class ProcessVideoJob implements ShouldQueue
 
         $video->update([
             'transcribed_text' => $transcription['full_text'],
+            'segments' => $transcription['segments'] ?? [],
             'status' => 'processing',
             'progress' => 40,
-        ]);
-
-        // Store segments for translation step
-        $video->update([
-            'segments' => $transcription['segments'] ?? [],
         ]);
     }
 
     protected function translateText(Video $video): void
     {
-        $video->update([
-            'status' => 'translating',
-            'progress' => 50,
-        ]);
+        $video->update(['status' => 'translating', 'progress' => 50]);
 
         $translateService = new TranslateService();
         $segments = $video->segments ?? [];
 
         if (empty($segments)) {
-            // Fallback to full text translation
             $translated = $translateService->translateToKhmer($video->transcribed_text);
-            $video->update([
-                'translated_text' => $translated,
-            ]);
+            $video->update(['translated_text' => $translated]);
         } else {
-            // Translate segments
             $translatedSegments = $translateService->translateBatch(
                 array_column($segments, 'text')
             );
 
-            // Update segments with translations
             foreach ($segments as $index => $segment) {
                 $segments[$index]['translated'] = $translatedSegments[$index]['translated'] ?? $segment['text'];
             }
 
-            // Build full translated text
             $fullTranslated = implode('', array_column($segments, 'translated'));
 
             $video->update([
@@ -158,25 +130,19 @@ class ProcessVideoJob implements ShouldQueue
             ]);
         }
 
-        $video->update([
-            'status' => 'processing',
-            'progress' => 70,
-        ]);
+        $video->update(['status' => 'processing', 'progress' => 70]);
     }
 
     protected function generateTTS(Video $video): void
     {
-        $video->update([
-            'status' => 'generating_tts',
-            'progress' => 75,
-        ]);
+        $video->update(['status' => 'generating_tts', 'progress' => 75]);
 
         $ttsService = new TTSService();
         $segments = $video->segments ?? [];
 
-        // Create directories
         $segmentsDir = storage_path('app/audio/segments/' . $video->id);
         $publicAudioDir = storage_path('app/public/audio');
+
         foreach ([$segmentsDir, $publicAudioDir] as $dir) {
             if (!is_dir($dir)) {
                 mkdir($dir, 0755, true);
@@ -184,22 +150,14 @@ class ProcessVideoJob implements ShouldQueue
         }
 
         if (empty($segments)) {
-            // Generate TTS for full text
             $tempAudioFile = $segmentsDir . '/full_text.mp3';
             $ttsService->generateSpeech($video->translated_text, $tempAudioFile);
-
-            $audioFiles = [[
-                'file' => $tempAudioFile,
-                'start_time' => 0,
-                'end_time' => 0,
-            ]];
+            $audioFiles = [['file' => $tempAudioFile, 'start_time' => 0, 'end_time' => 0]];
         } else {
-            // Generate TTS for each segment
             $ttsSegments = [];
             foreach ($segments as $index => $segment) {
                 $outputFile = $segmentsDir . '/segment_' . str_pad($index, 4, '0', STR_PAD_LEFT) . '.mp3';
                 $ttsService->generateSpeech($segment['translated'], $outputFile);
-
                 $ttsSegments[] = [
                     'file' => $outputFile,
                     'start_time' => $segment['start'] ?? 0,
@@ -209,19 +167,19 @@ class ProcessVideoJob implements ShouldQueue
             $audioFiles = $ttsSegments;
         }
 
-        // Concatenate all audio segments into a temporary file
         $tempConcatenatedPath = $this->concatenateAudioFiles($audioFiles, $video->id);
-
-        // Copy to public audio directory for web access
         $publicAudioPath = $publicAudioDir . '/' . $video->id . '_khmer.mp3';
         copy($tempConcatenatedPath, $publicAudioPath);
-        unlink($tempConcatenatedPath); // Clean up temporary file
 
-        // Store path relative to storage/app/public
-        $relativeAudioPath = 'audio/' . $video->id . '_khmer.mp3';
+        $isOriginalFile = count($audioFiles) === 1 ||
+            ($audioFiles[0]['file'] ?? null) === $tempConcatenatedPath;
+
+        if (!$isOriginalFile && file_exists($tempConcatenatedPath)) {
+            unlink($tempConcatenatedPath);
+        }
 
         $video->update([
-            'khmer_audio' => $relativeAudioPath,
+            'khmer_audio' => 'audio/' . $video->id . '_khmer.mp3',
             'audio_segments' => $audioFiles,
             'status' => 'processing',
             'progress' => 85,
@@ -230,14 +188,11 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function mergeVideo(Video $video): void
     {
-        $video->update([
-            'status' => 'merging',
-            'progress' => 90,
-        ]);
+        $video->update(['status' => 'merging', 'progress' => 90]);
 
         $ffmpegService = new FFmpegService();
         $originalVideoPath = storage_path('app/public/' . $video->original_video);
-        $khmerAudioPath = storage_path('app/' . $video->khmer_audio);
+        $khmerAudioPath = storage_path('app/public/' . $video->khmer_audio);
 
         if (!file_exists($originalVideoPath)) {
             throw new \Exception('Original video file not found');
@@ -247,24 +202,17 @@ class ProcessVideoJob implements ShouldQueue
             throw new \Exception('Khmer audio file not found');
         }
 
-        $finalVideoPath = $ffmpegService->mergeAudioWithVideo(
-            $originalVideoPath,
-            $khmerAudioPath
-        );
+        $finalVideoPath = $ffmpegService->mergeAudioWithVideo($originalVideoPath, $khmerAudioPath);
 
-        // Store path relative to storage/app/public
         $publicPath = storage_path('app/public/');
-        $relativeVideoPath = str_replace($publicPath, '', $finalVideoPath);
-        // Normalize directory separators for consistency
-        $relativeVideoPath = str_replace('\\', '/', $relativeVideoPath);
+        $relativeVideoPath = str_replace('\\', '/', str_replace($publicPath, '', $finalVideoPath));
 
         $video->update([
             'final_video' => $relativeVideoPath,
-            'status' => 'processing',
-            'progress' => 95,
+            'status' => 'completed',
+            'progress' => 100,
         ]);
 
-        // Generate subtitles (optional enhancement)
         $this->generateSubtitles($video);
     }
 
@@ -272,35 +220,23 @@ class ProcessVideoJob implements ShouldQueue
     {
         try {
             $segments = $video->segments ?? [];
-            if (empty($segments)) {
-                return;
-            }
+            if (empty($segments)) return;
 
             $srtContent = '';
             foreach ($segments as $index => $segment) {
                 $start = $this->secondsToSRTTime($segment['start'] ?? 0);
                 $end = $this->secondsToSRTTime($segment['end'] ?? 0);
-
                 $srtContent .= ($index + 1) . "\n";
                 $srtContent .= "{$start} --> {$end}\n";
                 $srtContent .= ($segment['translated'] ?? $segment['text']) . "\n\n";
             }
 
-            // Ensure public subtitles directory exists
             $subtitlesDir = storage_path('app/public/subtitles');
-            if (!is_dir($subtitlesDir)) {
-                mkdir($subtitlesDir, 0755, true);
-            }
+            if (!is_dir($subtitlesDir)) mkdir($subtitlesDir, 0755, true);
 
-            $srtPath = $subtitlesDir . '/' . $video->id . '.srt';
-            file_put_contents($srtPath, $srtContent);
+            file_put_contents($subtitlesDir . '/' . $video->id . '.srt', $srtContent);
 
-            // Store path relative to storage/app/public
-            $relativePath = 'subtitles/' . $video->id . '.srt';
-
-            $video->update([
-                'subtitle_file' => $relativePath,
-            ]);
+            $video->update(['subtitle_file' => 'subtitles/' . $video->id . '.srt']);
 
             Log::info('Subtitles generated', ['video_id' => $video->id]);
         } catch (\Exception $e) {
@@ -324,7 +260,6 @@ class ProcessVideoJob implements ShouldQueue
         foreach ($audioFiles as $file) {
             $listContent .= "file '" . $file['file'] . "'\n";
         }
-
         file_put_contents($listFile, $listContent);
 
         $cmd = sprintf(
@@ -340,11 +275,8 @@ class ProcessVideoJob implements ShouldQueue
             throw new \Exception('Audio concatenation failed');
         }
 
-        // Clean up individual segment files
         foreach ($audioFiles as $file) {
-            if (file_exists($file['file'])) {
-                unlink($file['file']);
-            }
+            if (file_exists($file['file'])) unlink($file['file']);
         }
         unlink($listFile);
 
@@ -358,12 +290,6 @@ class ProcessVideoJob implements ShouldQueue
         $secs = floor($seconds % 60);
         $milliseconds = floor(($seconds - floor($seconds)) * 1000);
 
-        return sprintf(
-            '%02d:%02d:%02d,%03d',
-            $hours,
-            $minutes,
-            $secs,
-            $milliseconds
-        );
+        return sprintf('%02d:%02d:%02d,%03d', $hours, $minutes, $secs, $milliseconds);
     }
 }
