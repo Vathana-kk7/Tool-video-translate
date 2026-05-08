@@ -7,56 +7,55 @@ use Illuminate\Support\Facades\Log;
 
 class TranslateService
 {
+    private string $apiUrl = 'https://api.mymemory.translated.net/get';
+
+    /**
+     * Main translate function
+     */
     public function translateToKhmer(string $text): string
     {
         try {
-            // ✅ Split if text too long (MyMemory limit is 500 chars)
             if (strlen($text) > 450) {
                 return $this->translateLongText($text);
             }
 
-            $response = Http::timeout(30)->get('https://api.mymemory.translated.net/get', [
-                'q'        => $text,
-                'langpair' => 'zh|km',
-            ]);
-
-            if (!$response->successful()) {
-                throw new \Exception('Translation API error: ' . $response->body());
-            }
-
-            $data           = $response->json();
-            $translatedText = $data['responseData']['translatedText'] ?? $text;
-
-            // ✅ Check if translation actually worked
-            if ($translatedText === $text || empty($translatedText)) {
-                Log::warning('Translation may have failed, returned original text', [
-                    'text' => substr($text, 0, 100),
-                ]);
-            }
-
-            Log::info('Translation completed', [
-                'original_length'   => strlen($text),
-                'translated_length' => strlen($translatedText),
-            ]);
-
-            return $translatedText;
+            return $this->translateChunk($text);
 
         } catch (\Exception $e) {
-            Log::error('Translation failed', [
-                'error' => $e->getMessage(),
-                'text'  => substr($text, 0, 100),
+            Log::error('Translate failed', [
+                'error' => $e->getMessage()
             ]);
-            throw $e;
+
+            return $text; // fallback
         }
     }
 
-    // ✅ New method to handle long text
+    /**
+     * Translate single chunk
+     */
+    private function translateChunk(string $text): string
+    {
+        $response = Http::timeout(30)->get($this->apiUrl, [
+            'q'        => $text,
+            'langpair' => 'zh|km',
+        ]);
+
+        if (!$response->successful()) {
+            return $text;
+        }
+
+        return $response->json()['responseData']['translatedText'] ?? $text;
+    }
+
+    /**
+     * Handle long text safely
+     */
     private function translateLongText(string $text): string
     {
-        // Split by sentences first
-        $sentences = preg_split('/(?<=[。！？；\.\!\?])/u', $text, -1, PREG_SPLIT_NO_EMPTY);
-        $chunks    = [];
-        $current   = '';
+        $sentences = preg_split('/(?<=[。！？；\.\!\?])/u', $text);
+
+        $chunks = [];
+        $current = '';
 
         foreach ($sentences as $sentence) {
             if (strlen($current . $sentence) <= 450) {
@@ -66,52 +65,36 @@ class TranslateService
                 $current = $sentence;
             }
         }
+
         if ($current) $chunks[] = $current;
 
         $translated = [];
+
         foreach ($chunks as $chunk) {
-            $translated[] = $this->translateToKhmer(trim($chunk));
-            sleep(1); // ✅ Avoid rate limiting
+            $translated[] = $this->translateChunk(trim($chunk));
+            usleep(500000); // avoid limit
         }
 
         return implode(' ', $translated);
     }
 
+    /**
+     * Batch translate
+     */
     public function translateBatch(array $sentences): array
     {
-        $translated = [];
+        $result = [];
 
-        foreach ($sentences as $index => $sentence) {
-            try {
-                $translated[] = [
-                    'original'   => $sentence,
-                    'translated' => $this->translateToKhmer($sentence),
-                    'index'      => $index,
-                ];
+        foreach ($sentences as $i => $sentence) {
+            $result[] = [
+                'index'      => $i,
+                'original'   => $sentence,
+                'translated' => $this->translateToKhmer($sentence),
+            ];
 
-                // ✅ Small delay between requests
-                usleep(500000); // 0.5 seconds
-
-            } catch (\Exception $e) {
-                Log::warning('Batch translation failed for sentence', [
-                    'index' => $index,
-                    'error' => $e->getMessage(),
-                ]);
-
-                $translated[] = [
-                    'original'   => $sentence,
-                    'translated' => $sentence, // fallback to original
-                    'index'      => $index,
-                    'failed'     => true,
-                ];
-            }
+            usleep(300000);
         }
 
-        return $translated;
-    }
-
-    public function getLanguageName(string $code): string
-    {
-        return ['zh' => 'Chinese', 'km' => 'Khmer'][$code] ?? $code;
+        return $result;
     }
 }

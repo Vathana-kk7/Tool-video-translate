@@ -26,3 +26,19 @@ Route::prefix('videos')->group(function () {
     Route::get('/', [App\Http\Controllers\Api\VideoController::class, 'index']);
     Route::get('/{id}', [App\Http\Controllers\Api\VideoController::class, 'show']);
 });
+Route::get('/tts-check', function () {
+    return [
+        'key' => config('services.tts.key'),
+        'url' => config('services.tts.url'),
+        'voice' => config('services.tts.voice'),
+    ];
+});
+Route::get('/debug-tts', function () {
+    dd([
+        'env_key' => env('TTS_API_KEY'),
+        'env_url' => env('TTS_API_URL'),
+
+        'config_key' => config('services.tts.key'),
+        'config_url' => config('services.tts.url'),
+    ]);
+});

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { HomeIcon, ArrowDownTrayIcon, PlayIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
+import { HomeIcon, DocumentTextIcon, ArrowUpTrayIcon } from '@heroicons/react/24/outline'
 import VideoPreview from '../components/VideoPreview'
 import AudioPlayer from '../components/AudioPlayer'
 import SubtitleDisplay from '../components/SubtitleDisplay'
@@ -10,7 +10,7 @@ import useVideoStore from '../contexts/videoStore'
 
 const Result = () => {
   const { id } = useParams()
-  const { videoDetails, loadVideoDetails, status, error } = useVideoStore()
+  const { videoDetails, loadVideoDetails, error } = useVideoStore()
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -23,15 +23,10 @@ const Result = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <svg className="animate-spin h-12 w-12 text-primary-600 mx-auto" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <h3 className="mt-4 text-lg font-medium text-gray-900">Loading video details...</h3>
-          </div>
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-gray-700 text-lg font-medium">កំពុងទាញយកព័ត៌មាន...</p>
         </div>
       </div>
     )
@@ -39,22 +34,18 @@ const Result = () => {
 
   if (error || !videoDetails) {
     return (
-      <div className="min-h-screen bg-gray-50 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6">
-              <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Video Not Found</h2>
-            <p className="text-gray-600 mb-8">
-              {error || 'The video you are looking for does not exist or has been removed.'}
-            </p>
-            <Link to="/upload" className="btn-primary">
-              Upload New Video
-            </Link>
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center bg-gray-50 border border-gray-200 rounded-2xl p-10 max-w-md shadow">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">រកមិនឃើញវីដេអូ</h2>
+          <p className="text-gray-500 mb-6">{error || 'វីដេអូមិនមាន ឬត្រូវបានលុប'}</p>
+          <Link to="/upload" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium transition">
+            Upload វីដេអូថ្មី
+          </Link>
         </div>
       </div>
     )
@@ -62,179 +53,169 @@ const Result = () => {
 
   const isProcessing = ['uploading', 'processing', 'extracting_audio', 'transcribing', 'translating', 'generating_tts', 'merging'].includes(videoDetails?.status)
 
-  const downloadDisabled = videoDetails?.status !== 'completed' || !videoDetails?.final_video_url
-
   return (
-    <div className="min-h-screen bg-gray-50 py-12">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Breadcrumb */}
-        <nav className="mb-8">
-          <ol className="flex items-center space-x-2 text-sm text-gray-500">
-            <li>
-              <Link to="/" className="hover:text-primary-600 flex items-center">
-                <HomeIcon className="w-4 h-4 mr-1" />
-                Home
-              </Link>
-            </li>
-            <li>/</li>
-            <li>
-              <Link to="/upload" className="hover:text-primary-600">
-                Upload
-              </Link>
-            </li>
-            <li>/</li>
-            <li className="text-gray-900 font-medium">Result</li>
-          </ol>
-        </nav>
+    <div className="min-h-screen bg-gray-50">
 
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Translation Result
-          </h1>
-          <p className="text-gray-600">
-            Your video has been successfully translated to Khmer. View, download, or share below.
-          </p>
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+          <nav className="flex items-center space-x-2 text-sm text-gray-500">
+            <Link to="/" className="hover:text-blue-600 flex items-center gap-1 transition">
+              <HomeIcon className="w-4 h-4" /> Home
+            </Link>
+            <span>/</span>
+            <Link to="/upload" className="hover:text-blue-600 transition">Upload</Link>
+            <span>/</span>
+            <span className="text-gray-900 font-medium">Result</span>
+          </nav>
+          <Link to="/upload" className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            <ArrowUpTrayIcon className="w-4 h-4" />
+            Upload ថ្មី
+          </Link>
         </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 py-8">
 
         {isProcessing ? (
-          // Processing View
+          /* ===== PROCESSING VIEW ===== */
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                Original Video
-              </h2>
-              <VideoPreview 
-                videoUrl={videoDetails.original_video_url} 
-                title="Waiting for processing... (Preview not available)"
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+              <h2 className="text-gray-900 font-semibold text-lg mb-3">វីដេអូដើម</h2>
+              <VideoPreview
+                videoUrl={videoDetails.original_video_url}
+                title="កំពុងរង់ចាំ Processing..."
               />
             </div>
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                Processing
-              </h2>
-              <StatusCard 
-                status={videoDetails.status} 
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+              <h2 className="text-gray-900 font-semibold text-lg mb-3">ស្ថានភាព</h2>
+              <StatusCard
+                status={videoDetails.status}
                 progress={videoDetails.progress}
                 error={videoDetails.error_message}
               />
             </div>
           </div>
         ) : (
-          // Completed Result View
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-            {/* Left Column - Video */}
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Original Video
+          /* ===== COMPLETED VIEW ===== */
+          <div className="space-y-6">
+
+            {/* Success Badge */}
+            <div className="text-center py-4">
+              <div className="inline-flex items-center gap-2 bg-green-100 text-green-700 px-4 py-2 rounded-full text-sm font-medium mb-3">
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                បំលែងបានជោគជ័យ!
+              </div>
+              <h1 className="text-3xl font-bold text-gray-900">លទ្ធផលការបំលែង</h1>
+              <p className="text-gray-500 mt-2">វីដេអូរបស់អ្នកត្រូវបានបំលែងទៅជាភាសាខ្មែរ</p>
+            </div>
+
+            {/* Videos Side by Side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                <h2 className="text-gray-900 font-semibold text-lg mb-3 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-blue-500 rounded-full"></span>
+                  វីដេអូដើម (ភាសាចិន)
                 </h2>
-                <VideoPreview 
-                  videoUrl={videoDetails.original_video_url} 
+                <VideoPreview
+                  videoUrl={videoDetails.original_video_url}
                   title="Original Chinese Video"
                 />
               </div>
 
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Translated Video
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                <h2 className="text-gray-900 font-semibold text-lg mb-3 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-green-500 rounded-full"></span>
+                  វីដេអូបំលែង (ភាសាខ្មែរ)
                 </h2>
-                <VideoPreview 
-                  videoUrl={videoDetails.final_video_url} 
-                  title="Khmer Voice Translation"
-                />
-              </div>
-            </div>
-
-            {/* Right Column - Audio and Subtitles */}
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Khmer Audio
-                </h2>
-                <AudioPlayer 
-                  audioUrl={videoDetails.khmer_audio_url}
-                  title="Generated Khmer Voice"
-                />
-              </div>
-
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Transcription & Translation
-                </h2>
-                <SubtitleDisplay 
-                  text={videoDetails.transcribed_text}
-                  translatedText={videoDetails.translated_text}
-                />
-              </div>
-
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Actions
-                </h2>
-                <div className="space-y-3">
-                  <DownloadButton 
-                    videoId={videoDetails.id}
-                    variant="success"
-                    disabled={downloadDisabled}
+                {videoDetails.final_video_url ? (
+                  <VideoPreview
+                    videoUrl={videoDetails.final_video_url}
+                    title="Translated Khmer Video"
                   />
-                  
-                  <div className="flex space-x-3">
-                    <a
-                      href={videoDetails.original_video_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-secondary"
-                    >
-                      View Original
-                    </a>
-                    {videoDetails.subtitle_url && (
-                      <a
-                        href={videoDetails.subtitle_url}
-                        download
-                        className="btn-secondary"
-                      >
-                        <DocumentTextIcon className="w-5 h-5 mr-2" />
-                        Download SRT
-                      </a>
-                    )}
+                ) : (
+                  <div className="aspect-video bg-gray-100 rounded-xl flex items-center justify-center border border-gray-200">
+                    <p className="text-gray-400">វីដេអូមិនទាន់បង្កើត</p>
                   </div>
-                </div>
+                )}
               </div>
             </div>
+
+            {/* Khmer Audio */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+              <h2 className="text-gray-900 font-semibold text-lg mb-3">🎵 សំឡេងខ្មែរ</h2>
+              <AudioPlayer
+                audioUrl={videoDetails.khmer_audio_url}
+                title="Generated Khmer Voice"
+              />
+            </div>
+
+            {/* Transcription */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+              <h2 className="text-gray-900 font-semibold text-lg mb-3">📝 អត្ថបទ & ការបំលែង</h2>
+              <SubtitleDisplay
+                text={videoDetails.transcribed_text}
+                translatedText={videoDetails.translated_text}
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+              <h2 className="text-gray-900 font-semibold text-lg mb-4">⬇️ ទាញយក</h2>
+              <div className="flex flex-wrap gap-3">
+                <DownloadButton
+                  videoId={videoDetails.id}
+                  variant="success"
+                  disabled={!videoDetails?.final_video_url}
+                />
+                {videoDetails.original_video_url && (
+                    <a
+                    href={videoDetails.original_video_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition border border-gray-200"
+                  >
+                    មើលវីដេអូដើម
+                  </a>
+                )}
+                {videoDetails.subtitle_url && (
+                    <a
+                    href={videoDetails.subtitle_url}
+                    download
+                    className="flex items-center gap-2 px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition border border-gray-200"
+                  >
+                    <DocumentTextIcon className="w-5 h-5" />
+                    Download SRT
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {/* Info Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                { title: 'គុណភាពការបំលែង', desc: 'AI Translation រក្សាការនិយាយខ្មែរធម្មជាតិ' },
+                { title: 'វីដេអូដើមមិនប្រែប្រួល', desc: 'វីដេអូដើមមិនត្រូវបានផ្លាស់ប្តូរ មានតែសំឡេងប្រែប្រួល' },
+                { title: 'ឯកសារ Subtitle', desc: 'ទាញយក SRT file សម្រាប់ embedding ឬ synchronization' },
+              ].map((card, i) => (
+                <div key={i} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                  <h3 className="font-semibold text-gray-900 mb-1 text-sm">{card.title}</h3>
+                  <p className="text-gray-500 text-sm">{card.desc}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Bottom */}
+            <div className="text-center pt-4 pb-8">
+              <Link to="/upload" className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-medium transition inline-block">
+                បំលែងវីដេអូថ្មី
+              </Link>
+            </div>
+
           </div>
         )}
-
-        {/* Info Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
-          <div className="card">
-            <h3 className="font-semibold text-gray-900 mb-2">Translation Quality</h3>
-            <p className="text-gray-600 text-sm">
-              Our AI translation maintains natural Khmer speech patterns and intonation for authentic voiceover.
-            </p>
-          </div>
-          <div className="card">
-            <h3 className="font-semibold text-gray-900 mb-2">Original Preserved</h3>
-            <p className="text-gray-600 text-sm">
-              The original video remains unchanged with only the audio track replaced with Khmer voice.
-            </p>
-          </div>
-          <div className="card">
-            <h3 className="font-semibold text-gray-900 mb-2">Subtitle File</h3>
-            <p className="text-gray-600 text-sm">
-              Download SRT subtitle file for embedding or manual synchronization.
-            </p>
-          </div>
-        </div>
-
-        {/* Bottom Actions */}
-        <div className="mt-12 text-center border-t border-gray-200 pt-8">
-          <div className="flex justify-center space-x-4">
-            <Link to="/upload" className="btn-primary">
-              Translate Another Video
-            </Link>
-          </div>
-        </div>
       </div>
     </div>
   )
