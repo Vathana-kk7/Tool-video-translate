@@ -30,10 +30,15 @@ return [
     | Text To Speech (eidosSpeech)
     |--------------------------------------------------------------------------
     */
-'tts' => [
-    'key'   => env('TTS_API_KEY'),
-    'url'   => env('TTS_API_URL'),
-    'voice' => env('TTS_VOICE', 'km-KH-SreymomNeural'),
-],
+    'tts' => [
+        'key'   => env('TTS_API_KEY'),
+        'url'   => env('TTS_API_URL'),
+        'voice' => env('TTS_VOICE', 'km-KH-SreymomNeural'),
+    ],
+
+    'azure_tts' => [
+        'key'    => env('AZURE_TTS_KEY'),
+        'region' => env('AZURE_TTS_REGION', 'eastasia'),
+    ],
 
 ];

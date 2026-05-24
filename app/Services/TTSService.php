@@ -2,142 +2,58 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class TTSService
 {
     /**
-     * Generate speech
+     * បម្លែងអត្ថបទទៅជាសំឡេងដោយប្រើ Edge TTS
      */
     public function generateSpeech(string $text, string $outputPath): string
     {
         try {
-            $apiKey = config('services.tts.key', env('TTS_API_KEY'));
-            $url    = config('services.tts.url', env('TTS_API_URL'));
-            $voice  = config('services.tts.voice', env('TTS_VOICE', 'km-KH-SreymomNeural'));
+            // ១. កំណត់ផ្លូវទៅកាន់ Python Script
+            $scriptPath = base_path('tts_edge.py');
 
-            if (!$apiKey || !$url) {
-                throw new \Exception('Missing TTS config (API_KEY or URL)');
+            // ២. បង្កើត Folder បើមិនទាន់មាន
+            $dir = dirname($outputPath);
+            if (!file_exists($dir)) {
+                mkdir($dir, 0777, true);
             }
 
-            $chunks = $this->splitText($text, 900);
-            $files = [];
-foreach ($chunks as $i => $chunk) {
-    $file = $outputPath . "_{$i}.mp3";
+            // ៣. រៀបចំ Command (ប្រើ 'py' សម្រាប់ Windows និងបន្ថែម 2>&1 ដើម្បីចាប់ Error)
+            // ប្រសិនបើ 'py' មិនដើរ សូមប្តូរទៅជា 'python' វិញ
+            $command = "py " . escapeshellarg($scriptPath) . " " . escapeshellarg($text) . " " . escapeshellarg($outputPath);
 
-    if ($i > 0) {
-        sleep(35); // បន្ថែមពី 25 → 35 វិនាទី
-    }
+            // ៤. ដំណើរការ Command និងទាញយក Error
+            $output = [];
+            $resultCode = null;
 
-    $response = $this->makeRequest($url, $apiKey, $voice, $chunk);
+            // យើងបន្ថែម " 2>&1" នៅខាងចុង command ដើម្បីឱ្យវាបង្ហាញកំហុស (Error) ទាំងអស់មកក្នុង $output
+            exec($command . " 2>&1", $output, $resultCode);
 
-    if (!$response->successful()) {
-        throw new \Exception('TTS failed: ' . $response->body());
-    }
+            // ៥. ពិនិត្យលទ្ធផល ប្រសិនបើ resultCode ខុសពី 0 មានន័យថា error ហើយ
+            if ($resultCode !== 0) {
+                // បង្រួម Error ដែលទាញបានពី Python មកជាអត្ថបទតែមួយ
+                $errorMessage = implode("\n", $output);
 
-    file_put_contents($file, $response->body());
-    $files[] = $file;
-}
+                // កត់ត្រាចូលក្នុង Log ដើម្បីឱ្យយើងងាយស្រួលតាមដាន
+                Log::error("Edge TTS Detail Error: " . $errorMessage);
 
-            return $this->mergeFiles($files, $outputPath);
+                // បោះ Exception ប្រាប់ទៅខាងក្រៅ
+                throw new \Exception("Edge TTS failed: " . $errorMessage);
+            }
+
+            // ពិនិត្យមើលថា តើ File សំឡេងពិតជាបានកើតឡើងមែនឬអត់
+            if (!file_exists($outputPath)) {
+                throw new \Exception("Audio file was not created at: " . $outputPath);
+            }
+
+            return $outputPath;
 
         } catch (\Exception $e) {
-            Log::error('TTS Error', [
-                'error' => $e->getMessage()
-            ]);
-
+            Log::error('TTS Error (Edge TTS)', ['error' => $e->getMessage()]);
             throw $e;
         }
-    }
-
-    /**
-     * Make HTTP request to TTS API
-     */
-    private function makeRequest(string $url, string $apiKey, string $voice, string $text, int $attempt = 1)
-{
-    $response = Http::timeout(60)
-        ->withHeaders([
-            'X-API-Key'    => $apiKey,
-            'Content-Type' => 'application/json',
-            'Accept'       => 'audio/mpeg',
-        ])
-        ->post($url, [
-            'text'  => $text,
-            'voice' => $voice,
-            'rate'  => '+0%',
-            'pitch' => '+0Hz',
-        ]);
-
-    // Retry សម្រាប់ rate limit និង concurrent limit
-    if (in_array($response->status(), [429, 503]) && $attempt <= 5) {
-        $waitTime = $response->json('detail.retry_after') ?? 60;
-        Log::warning("TTS limit hit (attempt {$attempt}), waiting {$waitTime}s...");
-        sleep($waitTime + 5);
-        return $this->makeRequest($url, $apiKey, $voice, $text, $attempt + 1);
-    }
-
-    return $response;
-}
-    private function splitText(string $text, int $limit): array
-    {
-        $words = preg_split('/\s+/u', $text);
-        $chunks = [];
-        $current = '';
-
-        foreach ($words as $word) {
-            if (mb_strlen(trim($current . ' ' . $word)) > $limit) {
-                if ($current !== '') {
-                    $chunks[] = trim($current);
-                }
-                $current = $word;
-            } else {
-                $current .= ' ' . $word;
-            }
-        }
-
-        if (trim($current) !== '') {
-            $chunks[] = trim($current);
-        }
-
-        return $chunks;
-    }
-
-    /**
-     * Merge audio files with ffmpeg
-     */
-    private function mergeFiles(array $files, string $outputPath): string
-    {
-        if (count($files) === 1) {
-            rename($files[0], $outputPath);
-            return $outputPath;
-        }
-
-        $list = $outputPath . '_list.txt';
-
-        $content = '';
-        foreach ($files as $f) {
-            $content .= "file '" . str_replace('\\', '/', $f) . "'\n";
-        }
-
-        file_put_contents($list, $content);
-
-        $ffmpeg = env('FFMPEG_PATH', 'ffmpeg');
-        $cmd = "\"$ffmpeg\" -f concat -safe 0 -i \"$list\" -c copy \"$outputPath\" -y";
-
-        $result = null;
-        exec($cmd, $output, $result);
-
-        foreach ($files as $f) {
-            if (file_exists($f)) unlink($f);
-        }
-
-        if (file_exists($list)) unlink($list);
-
-        if ($result !== 0) {
-            throw new \Exception('FFmpeg merge failed with code: ' . $result);
-        }
-
-        return $outputPath;
     }
 }

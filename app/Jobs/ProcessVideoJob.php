@@ -37,13 +37,6 @@ class ProcessVideoJob implements ShouldQueue
             $this->generateTTS($video);
             $this->mergeVideo($video);
 
-            $video->update([
-                'khmer_audio' => 'public/audio/' . $video->id . '_khmer.mp3', // ✅ កែត្រង់នេះ
-                'audio_segments' => $audioFiles,
-                'status' => 'processing',
-                'progress' => 85,
-            ]);
-
             Log::info('Video processing completed successfully', [
                 'video_id' => $this->videoId
             ]);
