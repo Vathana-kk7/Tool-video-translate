@@ -85,8 +85,8 @@ const Upload = () => {
                 {/* Progress bars */}
                 <div className="space-y-4">
                   <div className="progress-bar">
-                    <div 
-                      className="progress-bar-fill" 
+                    <div
+                      className="progress-bar-fill"
                       style={{ width: '100%' }}
                     />
                   </div>
