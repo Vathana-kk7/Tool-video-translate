@@ -163,14 +163,14 @@ Start the queue worker to process videos in the background:
 
 ```bash
 # In a separate terminal
-php artisan queue:work --tries=3 --timeout=3600
+php artisan queue:work database --queue=high,default --sleep=2 --timeout=3600 --tries=1000 --backoff=60
 ```
 
 ### Laravel Development Server
 
 ```bash
-# Start the Laravel server
-php artisan serve --host=0.0.0.0 --port=8000
+# On Windows, start the API and queue worker with the optimized upload temp directory
+start-server.bat
 ```
 
 ## 📡 API Endpoints

@@ -38,7 +38,7 @@ return [
         'driver' => 'database',
         'table' => 'jobs',
         'queue' => 'default',
-        'retry_after' => 600, // បង្កើនដល់ 600 វិនាទី (10 នាទី)
+        'retry_after' => 3700,
         'after_commit' => false,
     ],
 

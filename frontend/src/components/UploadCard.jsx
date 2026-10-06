@@ -5,7 +5,13 @@ import useVideoStore from '../contexts/videoStore'
 
 const UploadCard = () => {
   const [isDragging, setIsDragging] = useState(false)
-  const { uploadVideo, status, uploadProgress, currentVideo, error } = useVideoStore()
+  const { uploadVideo, status, uploadProgress, uploadSpeed, uploadEtaSeconds, currentVideo, error } = useVideoStore()
+
+  const uploadEstimate = uploadSpeed > 0
+    ? `${(uploadSpeed / (1024 * 1024)).toFixed(1)} MB/s${
+      uploadEtaSeconds !== null ? ` · about ${Math.ceil(uploadEtaSeconds)}s left` : ''
+    }`
+    : ''
 
   const onDrop = useCallback((acceptedFiles) => {
     if (acceptedFiles.length > 0) {
@@ -27,7 +33,7 @@ const UploadCard = () => {
   const getStatusMessage = () => {
     switch (status) {
       case 'uploading':
-        return `Uploading... ${Math.round(uploadProgress)}%`
+        return `Uploading... ${Math.round(uploadProgress)}%${uploadEstimate ? ` · ${uploadEstimate}` : ''}`
       case 'processing':
         return 'Processing video...'
       case 'completed':

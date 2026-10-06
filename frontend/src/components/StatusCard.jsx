@@ -66,8 +66,8 @@ const StatusCard = ({
                     <div className="text-sm text-gray-500 mt-1">
                       {status === 'extracting_audio' && 'Using FFmpeg to extract audio track...'}
                       {status === 'transcribing' && 'Converting Chinese speech to text using Whisper AI...'}
-                      {status === 'translating' && 'Translating text to Khmer using Google Translate...'}
-                      {status === 'generating_tts' && 'Creating natural Khmer voice using Azure TTS...'}
+                      {status === 'translating' && 'Translating speech to Khmer...'}
+                      {status === 'generating_tts' && 'Creating natural Khmer voice...'}
                       {status === 'merging' && 'Combining new audio with original video...'}
                     </div>
                   )}

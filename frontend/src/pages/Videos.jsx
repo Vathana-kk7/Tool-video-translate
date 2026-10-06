@@ -12,6 +12,9 @@ const Videos = () => {
 
   useEffect(() => {
     fetchVideos()
+
+    const intervalId = window.setInterval(fetchVideos, 5000)
+    return () => window.clearInterval(intervalId)
   }, [])
 
   const fetchVideos = async () => {

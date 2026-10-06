@@ -4,11 +4,27 @@ class VideoService {
   /**
    * Upload video for translation
    */
-  async uploadVideo(file) {
+  async uploadVideo(file, onProgress) {
     const formData = new FormData()
     formData.append('video', file)
+    const startedAt = performance.now()
 
-    return await api.post('/videos/upload', formData)
+    return await api.post('/videos/upload', formData, {
+      onUploadProgress: (event) => {
+        if (event.total && onProgress) {
+          const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001)
+          const bytesPerSecond = event.loaded / elapsedSeconds
+          const remainingSeconds = bytesPerSecond > 0
+            ? Math.max(0, (event.total - event.loaded) / bytesPerSecond)
+            : null
+
+          onProgress(
+            Math.round((event.loaded / event.total) * 100),
+            { bytesPerSecond, remainingSeconds }
+          )
+        }
+      },
+    })
   }
 
   /**

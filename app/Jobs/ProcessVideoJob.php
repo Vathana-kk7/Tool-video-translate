@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\TranslationRateLimitException;
 use App\Models\Video;
 use App\Services\FFmpegService;
+use App\Services\SyncAudioService;
 use App\Services\TranslateService;
 use App\Services\TTSService;
 use Illuminate\Bus\Queueable;
@@ -12,15 +14,14 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class ProcessVideoJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 3;
+    public $tries = 1000;
     public $timeout = 3600;
-    public $backoff = 60;
+    public $backoff = [60, 120];
 
     public function __construct(
         public int $videoId
@@ -42,15 +43,33 @@ class ProcessVideoJob implements ShouldQueue
             ]);
 
         } catch (\Exception $e) {
+            $attempts = $this->attempts();
+            $isTranslationRateLimit = $e instanceof TranslationRateLimitException;
+            $isTemporaryTtsFailure = $video->status === 'generating_tts'
+                && str_contains(strtolower($e->getMessage()), 'no audio');
+            $willRetry = ($isTranslationRateLimit || $isTemporaryTtsFailure)
+                && $attempts < $this->tries;
+            $retryMessage = $isTranslationRateLimit
+                ? 'Temporary translation failure; retrying automatically. '
+                : 'Temporary Khmer voice service failure; retrying automatically. ';
             $video->update([
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
+                'status' => $willRetry ? $video->status : 'failed',
+                'error_message' => $willRetry
+                    ? $retryMessage . $e->getMessage()
+                    : $e->getMessage(),
             ]);
 
             Log::error('Video processing failed', [
                 'video_id' => $this->videoId,
+                'attempt' => $attempts,
+                'will_retry' => $willRetry,
                 'error' => $e->getMessage()
             ]);
+
+            if ($willRetry) {
+                $this->release($isTranslationRateLimit ? $e->retryAfterSeconds : 60);
+                return;
+            }
 
             throw $e;
         }
@@ -58,6 +77,14 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function extractAudio(Video $video): void
     {
+        $audioPath = $video->extracted_audio
+            ? storage_path('app/' . $video->extracted_audio)
+            : null;
+
+        if ($audioPath && is_file($audioPath)) {
+            return;
+        }
+
         $video->update(['status' => 'extracting_audio', 'progress' => 10]);
 
         $ffmpegService = new FFmpegService();
@@ -79,6 +106,10 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function transcribeAudio(Video $video): void
     {
+        if (trim((string) $video->transcribed_text) !== '') {
+            return;
+        }
+
         $video->update(['status' => 'transcribing', 'progress' => 30]);
 
         $whisperService = new \App\Services\WhisperService();
@@ -89,6 +120,9 @@ class ProcessVideoJob implements ShouldQueue
         }
 
         $transcription = $whisperService->transcribeWithSegments($audioPath);
+        if (trim($transcription['full_text'] ?? '') === '') {
+            throw new \RuntimeException('No Chinese speech was detected in the video.');
+        }
 
         $video->update([
             'transcribed_text' => $transcription['full_text'],
@@ -100,82 +134,117 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function translateText(Video $video): void
     {
-        $video->update(['status' => 'translating', 'progress' => 50]);
-
         $translateService = new TranslateService();
         $segments = $video->segments ?? [];
+        $translatedCount = collect($segments)
+            ->filter(fn ($segment) => $this->hasKhmerTranslation((string) ($segment['translated'] ?? '')))
+            ->count();
+        $video->update([
+            'status' => 'translating',
+            'progress' => 50 + (int) floor(
+                ($translatedCount / max(count($segments), 1)) * 20
+            ),
+        ]);
 
         if (empty($segments)) {
-            $translated = $translateService->translateToKhmer($video->transcribed_text);
-            $video->update(['translated_text' => $translated]);
-        } else {
-            $translatedSegments = $translateService->translateBatch(
-                array_column($segments, 'text')
-            );
-
-            foreach ($segments as $index => $segment) {
-                $segments[$index]['translated'] = $translatedSegments[$index]['translated'] ?? $segment['text'];
+            if (trim((string) $video->translated_text) !== '') {
+                $video->update(['progress' => 70]);
+                return;
             }
 
-            $fullTranslated = implode('', array_column($segments, 'translated'));
+            $translated = $translateService->translateToKhmer($video->transcribed_text);
+            if (trim($translated) === '') {
+                throw new \RuntimeException('No speech text was available to translate.');
+            }
+            $video->update(['translated_text' => $translated]);
+        } else {
+            $pendingIndexes = [];
+            foreach ($segments as $index => $segment) {
+                if (!$this->hasKhmerTranslation((string) ($segment['translated'] ?? ''))) {
+                    $pendingIndexes[] = $index;
+                }
+            }
 
-            $video->update([
-                'translated_text' => $fullTranslated,
-                'segments' => $segments,
-            ]);
+            $batches = array_chunk($pendingIndexes, 8);
+            foreach ($batches as $batchIndex => $indexes) {
+                $translatedSegments = $translateService->translateBatch(
+                    array_map(fn ($index) => $segments[$index]['text'] ?? '', $indexes)
+                );
+
+                foreach ($indexes as $position => $index) {
+                    $segments[$index]['translated'] = $translatedSegments[$position]['translated'];
+                }
+
+                $translatedCount = collect($segments)
+                    ->filter(fn ($segment) => $this->hasKhmerTranslation((string) ($segment['translated'] ?? '')))
+                    ->count();
+                $video->update([
+                    'translated_text' => implode('', array_column($segments, 'translated')),
+                    'segments' => $segments,
+                    'error_message' => null,
+                    'progress' => 50 + (int) floor(
+                        ($translatedCount / max(count($segments), 1)) * 20
+                    ),
+                ]);
+            }
         }
 
         $video->update(['status' => 'processing', 'progress' => 70]);
     }
 
+    private function hasKhmerTranslation(string $text): bool
+    {
+        return preg_match('/[\x{1780}-\x{17FF}]/u', $text) === 1;
+    }
+
     protected function generateTTS(Video $video): void
     {
-        $video->update(['status' => 'generating_tts', 'progress' => 75]);
+        $video->update([
+            'status' => 'generating_tts',
+            'progress' => 75,
+            'error_message' => null,
+        ]);
 
         $ttsService = new TTSService();
         $segments = $video->segments ?? [];
 
-        $segmentsDir = storage_path('app/audio/segments/' . $video->id);
         $publicAudioDir = storage_path('app/public/audio');
 
-        foreach ([$segmentsDir, $publicAudioDir] as $dir) {
-            if (!is_dir($dir)) {
-                mkdir($dir, 0755, true);
-            }
+        if (!is_dir($publicAudioDir) && !mkdir($publicAudioDir, 0755, true) && !is_dir($publicAudioDir)) {
+            throw new \RuntimeException("Unable to create Khmer audio directory: {$publicAudioDir}");
         }
 
-        if (empty($segments)) {
-            $tempAudioFile = $segmentsDir . '/full_text.mp3';
-            $ttsService->generateSpeech($video->translated_text, $tempAudioFile);
-            $audioFiles = [['file' => $tempAudioFile, 'start_time' => 0, 'end_time' => 0]];
-        } else {
-            $ttsSegments = [];
-            foreach ($segments as $index => $segment) {
-                $outputFile = $segmentsDir . '/segment_' . str_pad($index, 4, '0', STR_PAD_LEFT) . '.mp3';
-                $ttsService->generateSpeech($segment['translated'], $outputFile);
-                $ttsSegments[] = [
-                    'file' => $outputFile,
-                    'start_time' => $segment['start'] ?? 0,
-                    'end_time' => $segment['end'] ?? 0,
-                ];
-            }
-            $audioFiles = $ttsSegments;
+        $originalVideoPath = storage_path('app/public/' . $video->original_video);
+        $videoDuration = (new FFmpegService())->getVideoDuration($originalVideoPath);
+
+        if ($videoDuration <= 0) {
+            throw new \RuntimeException('Unable to determine the original video duration.');
         }
 
-        $tempConcatenatedPath = $this->concatenateAudioFiles($audioFiles, $video->id);
         $publicAudioPath = $publicAudioDir . '/' . $video->id . '_khmer.mp3';
-        copy($tempConcatenatedPath, $publicAudioPath);
-
-        $isOriginalFile = count($audioFiles) === 1 ||
-            ($audioFiles[0]['file'] ?? null) === $tempConcatenatedPath;
-
-        if (!$isOriginalFile && file_exists($tempConcatenatedPath)) {
-            unlink($tempConcatenatedPath);
+        if (empty($segments)) {
+            $segments = [[
+                'start' => 0,
+                'end' => $videoDuration,
+                'translated' => $video->translated_text,
+            ]];
         }
+
+        (new SyncAudioService($ttsService))->buildSyncedAudio(
+            $segments,
+            $videoDuration,
+            $publicAudioPath
+        );
 
         $video->update([
             'khmer_audio' => 'audio/' . $video->id . '_khmer.mp3',
-            'audio_segments' => $audioFiles,
+            'audio_segments' => array_map(function ($segment) {
+                return [
+                    'start_time' => $segment['start'] ?? 0,
+                    'end_time' => $segment['end'] ?? 0,
+                    'text' => $segment['translated'] ?? '',
+                ];
+            }, $segments),
             'status' => 'processing',
             'progress' => 85,
         ]);
@@ -206,6 +275,7 @@ class ProcessVideoJob implements ShouldQueue
             'final_video' => $relativeVideoPath,
             'status' => 'completed',
             'progress' => 100,
+            'error_message' => null,
         ]);
 
         $this->generateSubtitles($video);
@@ -240,42 +310,6 @@ class ProcessVideoJob implements ShouldQueue
                 'error' => $e->getMessage()
             ]);
         }
-    }
-
-    protected function concatenateAudioFiles(array $audioFiles, int $videoId): string
-    {
-        if (count($audioFiles) === 1) {
-            return $audioFiles[0]['file'];
-        }
-
-        $outputFile = storage_path('app/audio/concatenated_' . $videoId . '.mp3');
-        $listFile = storage_path('app/audio/list_' . $videoId . '.txt');
-
-        $listContent = '';
-        foreach ($audioFiles as $file) {
-            $listContent .= "file '" . $file['file'] . "'\n";
-        }
-        file_put_contents($listFile, $listContent);
-
-        $cmd = sprintf(
-            '%s -f concat -safe 0 -i %s -c copy %s -y',
-            env('FFMPEG_PATH', 'ffmpeg'),
-            escapeshellarg($listFile),
-            escapeshellarg($outputFile)
-        );
-
-        exec($cmd, $output, $returnCode);
-
-        if ($returnCode !== 0) {
-            throw new \Exception('Audio concatenation failed');
-        }
-
-        foreach ($audioFiles as $file) {
-            if (file_exists($file['file'])) unlink($file['file']);
-        }
-        unlink($listFile);
-
-        return $outputFile;
     }
 
     protected function secondsToSRTTime(float $seconds): string

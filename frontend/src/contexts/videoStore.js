@@ -6,6 +6,8 @@ const useVideoStore = create((set, get) => ({
   // State
   currentVideo: null,
   uploadProgress: 0,
+  uploadSpeed: 0,
+  uploadEtaSeconds: null,
   processingProgress: 0,
   status: 'idle', // idle, uploading, processing, completed, failed
   error: null,
@@ -27,6 +29,8 @@ const useVideoStore = create((set, get) => ({
   reset: () => set({
     currentVideo: null,
     uploadProgress: 0,
+    uploadSpeed: 0,
+    uploadEtaSeconds: null,
     processingProgress: 0,
     status: 'idle',
     error: null,
@@ -39,15 +43,25 @@ const useVideoStore = create((set, get) => ({
       set({ 
         status: 'uploading', 
         error: null,
-        uploadProgress: 0 
+        uploadProgress: 0,
+        uploadSpeed: 0,
+        uploadEtaSeconds: null,
       })
       
-      const response = await videoService.uploadVideo(file)
+      const response = await videoService.uploadVideo(file, (uploadProgress, metrics) => {
+        set({
+          uploadProgress,
+          uploadSpeed: metrics.bytesPerSecond,
+          uploadEtaSeconds: metrics.remainingSeconds,
+        })
+      })
       const responseData = response.data?.data ?? response.data ?? response
       
       set({ 
         status: 'processing',
         uploadProgress: 100,
+        uploadSpeed: 0,
+        uploadEtaSeconds: null,
         currentVideo: {
           id: responseData.video_id,
           status: responseData.status,
@@ -61,7 +75,9 @@ const useVideoStore = create((set, get) => ({
       
       return responseData.video_id
     } catch (error) {
-      const errorMessage = error.response?.data?.message || 'Upload failed. Please try again.'
+      const errorMessage = error.response?.data?.message
+        || error.message
+        || 'Upload failed. Please try again.'
       set({ 
         status: 'failed', 
         error: errorMessage 
@@ -71,7 +87,7 @@ const useVideoStore = create((set, get) => ({
     }
   },
 
-  async pollVideoStatus(videoId, interval = 2000, maxAttempts = 180) {
+  async pollVideoStatus(videoId, interval = 2000, maxAttempts = 1800) {
     let attempts = 0
     
     const poll = async () => {

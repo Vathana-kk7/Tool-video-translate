@@ -40,8 +40,15 @@ class VideoController extends Controller
             $filename = time() . '_' . Str::random(12) . '.' . $file->getClientOriginalExtension();
             $filePath = 'videos/' . $filename;
 
-            // Store file in public disk
-            $storedPath = $request->file('video')->storeAs('public', $filePath);
+            $destinationDirectory = storage_path('app/public/videos');
+            if (!is_dir($destinationDirectory)
+                && !mkdir($destinationDirectory, 0755, true)
+                && !is_dir($destinationDirectory)) {
+                throw new \RuntimeException('Unable to create the video storage directory.');
+            }
+
+            // Same-volume upload temp storage lets PHP move the completed upload without copying it again.
+            $file->move($destinationDirectory, $filename);
 
             // Create video record
             $video = Video::create([
@@ -50,15 +57,27 @@ class VideoController extends Controller
                 'progress' => 0,
             ]);
 
-            // Dispatch processing job. If dispatch fails, keep the upload accepted
-            // and let the job retry or be handled by a queue worker later.
             try {
-                ProcessVideoJob::dispatch($video->id);
+                ProcessVideoJob::dispatch($video->id)->onQueue('high');
             } catch (\Throwable $e) {
-                \Log::warning('Video dispatch failed; upload was accepted and processing will retry.', [
+                $video->update([
+                    'status' => 'failed',
+                    'error_message' => 'Video processing could not be queued. Please restart the queue worker and upload again.',
+                ]);
+
+                \Log::error('Video processing job dispatch failed.', [
                     'video_id' => $video->id,
                     'error' => $e->getMessage(),
                 ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Video uploaded but could not be queued for processing. Please restart the video translation server and try again.',
+                    'data' => [
+                        'video_id' => $video->id,
+                        'status' => $video->status,
+                    ],
+                ], 503);
             }
 
             return response()->json([
@@ -225,4 +244,3 @@ class VideoController extends Controller
         }
     }
 }
-

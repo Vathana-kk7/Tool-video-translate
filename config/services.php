@@ -41,4 +41,13 @@ return [
         'region' => env('AZURE_TTS_REGION', 'eastasia'),
     ],
 
+    'google_translate' => [
+        'key' => env('GOOGLE_TRANSLATE_API_KEY'),
+    ],
+
+    'groq' => [
+        'key' => env('GROQ_API_KEY'),
+        'translation_model' => env('GROQ_TRANSLATION_MODEL', 'qwen/qwen3.8-27b'),
+    ],
+
 ];
