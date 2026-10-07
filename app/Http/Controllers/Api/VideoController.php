@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessVideoJob;
+use App\Jobs\UpdateBackgroundAudioJob;
 use App\Models\Video;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -18,6 +19,7 @@ class VideoController extends Controller
     public function upload(Request $request)
     {
         $validator = Validator::make($request->all(), [
+            'video_name' => 'required|string|max:255',
             // NOTE: max: is in kilobytes. 5242880 KB = 5GB.
             'video' => 'required|file|mimes:mp4,avi,mov,mkv,webm|max:5242880', // 5GB
         ], [
@@ -52,6 +54,7 @@ class VideoController extends Controller
 
             // Create video record
             $video = Video::create([
+                'video_name' => trim($request->input('video_name')),
                 'original_video' => $filePath,
                 'status' => 'pending',
                 'progress' => 0,
@@ -75,6 +78,7 @@ class VideoController extends Controller
                     'message' => 'Video uploaded but could not be queued for processing. Please restart the video translation server and try again.',
                     'data' => [
                         'video_id' => $video->id,
+                        'video_name' => $video->video_name,
                         'status' => $video->status,
                     ],
                 ], 503);
@@ -85,6 +89,7 @@ class VideoController extends Controller
                 'message' => 'Video uploaded successfully. Processing has been queued.',
                 'data' => [
                     'video_id' => $video->id,
+                    'video_name' => $video->video_name,
                     'status' => $video->status,
                     'progress' => $video->progress,
                 ],
@@ -115,8 +120,10 @@ class VideoController extends Controller
                 'success' => true,
                 'data' => [
                     'video_id' => $video->id,
+                    'video_name' => $video->video_name,
                     'status' => $video->status,
                     'progress' => $video->progress,
+                    'background_audio_volume' => $video->background_audio_volume ?? 50,
                     'original_video_url' => $video->original_video_url,
                     'final_video_url' => $video->final_video_url,
                     'error_message' => $video->error_message,
@@ -175,6 +182,71 @@ class VideoController extends Controller
     }
 
     /**
+     * Rebuild a completed video with the selected background audio volume.
+     */
+    public function updateBackgroundAudio(Request $request, string $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'background_audio_volume' => 'required|integer|min:0|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Background volume must be an integer between 0 and 100.',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $video = Video::findOrFail($id);
+        if (!$video->canBeDownloaded() || !$video->khmer_audio) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A completed video with generated Khmer audio is required.',
+            ], 409);
+        }
+
+        $video->update([
+            'status' => 'merging',
+            'progress' => 90,
+            'error_message' => null,
+        ]);
+
+        try {
+            UpdateBackgroundAudioJob::dispatch(
+                $video->id,
+                (int) $request->input('background_audio_volume')
+            )->onQueue('high');
+        } catch (\Throwable $e) {
+            $video->update([
+                'status' => 'completed',
+                'error_message' => 'Could not queue the background audio update. Please try again.',
+            ]);
+            \Log::error('Background audio update dispatch failed.', [
+                'video_id' => $video->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not queue the background audio update. Please check that the queue worker is running.',
+            ], 503);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Background audio update started.',
+            'data' => [
+                'id' => $video->id,
+                'video_name' => $video->video_name,
+                'status' => $video->status,
+                'progress' => $video->progress,
+                'background_audio_volume' => $video->background_audio_volume ?? 50,
+            ],
+        ], 202);
+    }
+
+    /**
      * List all videos for user
      */
     public function index(Request $request)
@@ -189,10 +261,13 @@ class VideoController extends Controller
                 'data' => $videos->map(function ($video) {
                     return [
                         'id' => $video->id,
+                        'video_name' => $video->video_name,
                         'status' => $video->status,
                         'progress' => $video->progress,
+                        'background_audio_volume' => $video->background_audio_volume ?? 50,
                         'original_video_url' => $video->original_video_url,
                         'final_video_url' => $video->final_video_url,
+                        'thumbnail_url' => $video->thumbnail_url,
                         'created_at' => $video->created_at->toISOString(),
                     ];
                 }),
@@ -217,6 +292,7 @@ class VideoController extends Controller
                 'success' => true,
                 'data' => [
                     'id' => $video->id,
+                    'video_name' => $video->video_name,
                     'original_video' => $video->original_video,
                     'extracted_audio' => $video->extracted_audio,
                     'transcribed_text' => $video->transcribed_text,
@@ -226,10 +302,12 @@ class VideoController extends Controller
                     'subtitle_file' => $video->subtitle_file,
                     'status' => $video->status,
                     'progress' => $video->progress,
+                    'background_audio_volume' => $video->background_audio_volume ?? 50,
                     'error_message' => $video->error_message,
                     'segments' => $video->segments,
                     'original_video_url' => $video->original_video_url,
                     'final_video_url' => $video->final_video_url,
+                    'thumbnail_url' => $video->thumbnail_url,
                     'khmer_audio_url' => $video->khmer_audio_url,
                     'subtitle_url' => $video->subtitle_url,
                     'created_at' => $video->created_at->toISOString(),

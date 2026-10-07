@@ -23,6 +23,7 @@ Route::prefix('videos')->group(function () {
     Route::post('/upload', [App\Http\Controllers\Api\VideoController::class, 'upload']);
     Route::get('/{id}/status', [App\Http\Controllers\Api\VideoController::class, 'status']);
     Route::get('/{id}/download', [App\Http\Controllers\Api\VideoController::class, 'download']);
+    Route::post('/{id}/background-audio', [App\Http\Controllers\Api\VideoController::class, 'updateBackgroundAudio']);
     Route::get('/', [App\Http\Controllers\Api\VideoController::class, 'index']);
     Route::get('/{id}', [App\Http\Controllers\Api\VideoController::class, 'show']);
 });

@@ -50,4 +50,9 @@ return [
         'translation_model' => env('GROQ_TRANSLATION_MODEL', 'qwen/qwen3.8-27b'),
     ],
 
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+        'translation_model' => env('GEMINI_TRANSLATION_MODEL', 'gemini-3.5-flash-lite'),
+    ],
+
 ];

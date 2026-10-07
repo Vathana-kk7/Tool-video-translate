@@ -8,6 +8,13 @@ use Tests\TestCase;
 
 class TranslateServiceTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config(['services.gemini.key' => null]);
+    }
+
     public function test_it_returns_the_khmer_translation_from_the_provider(): void
     {
         config(['services.groq.key' => null]);
@@ -105,7 +112,7 @@ class TranslateServiceTest extends TestCase
         $this->assertSame(['សួស្តី', 'លាហើយ'], array_column($translations, 'translated'));
         $this->assertCount(1, Http::recorded());
         Http::assertSent(fn ($request) => $request['model'] === 'llama-test'
-            && $request['max_tokens'] === 192
+            && $request['max_tokens'] === 32
             && !isset($request['response_format'])
             && str_contains($request['messages'][1]['content'], '2. 再见')
             && $request->hasHeader('Authorization', 'Bearer test-key'));
@@ -125,6 +132,78 @@ class TranslateServiceTest extends TestCase
         $this->expectExceptionMessage('Groq translation rate limit reached');
 
         (new TranslateService())->translateToKhmer('你好');
+    }
+
+    public function test_it_uses_gemini_when_groq_is_rate_limited(): void
+    {
+        config([
+            'services.groq.key' => 'groq-test-key',
+            'services.gemini.key' => 'gemini-test-key',
+            'services.gemini.translation_model' => 'gemini-test-model',
+        ]);
+
+        Http::fake([
+            'api.groq.com/*' => Http::response([
+                'error' => ['message' => 'Rate limit exceeded'],
+            ], 429),
+            'generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [[
+                    'content' => [
+                        'parts' => [['text' => "1. សួស្តី\n2. លាហើយ"]],
+                    ],
+                ]],
+            ]),
+        ]);
+
+        $translations = (new TranslateService())->translateBatch(['你好', '再见']);
+
+        $this->assertSame(['សួស្តី', 'លាហើយ'], array_column($translations, 'translated'));
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'gemini-test-model:generateContent')
+            && $request->hasHeader('x-goog-api-key', 'gemini-test-key')
+            && str_contains($request['contents'][0]['parts'][0]['text'], '2. 再见'));
+    }
+
+    public function test_it_uses_gemini_directly_when_groq_is_not_configured(): void
+    {
+        config([
+            'services.groq.key' => null,
+            'services.gemini.key' => 'gemini-test-key',
+            'services.google_translate.key' => 'google-test-key',
+        ]);
+
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [[
+                    'content' => ['parts' => [['text' => 'សួស្តី']]],
+                ]],
+            ]),
+        ]);
+
+        $this->assertSame('សួស្តី', (new TranslateService())->translateToKhmer('你好'));
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'generateContent')
+            && $request->hasHeader('x-goog-api-key', 'gemini-test-key'));
+    }
+
+    public function test_it_retries_when_gemini_free_tier_is_rate_limited(): void
+    {
+        config([
+            'services.groq.key' => null,
+            'services.gemini.key' => 'gemini-test-key',
+        ]);
+
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response([
+                'error' => ['message' => 'Resource exhausted'],
+            ], 429, ['Retry-After' => '12']),
+        ]);
+
+        try {
+            (new TranslateService())->translateBatch(['你好']);
+            $this->fail('Expected Gemini rate limit to be released for queue retry.');
+        } catch (\App\Exceptions\TranslationRateLimitException $exception) {
+            $this->assertStringContainsString('Gemini translation free-tier rate limit reached', $exception->getMessage());
+            $this->assertSame(12, $exception->retryAfterSeconds);
+        }
     }
 
     public function test_it_waits_for_the_token_window_when_groq_reports_output_token_limit(): void
@@ -174,8 +253,37 @@ class TranslateServiceTest extends TestCase
             array_column($translations, 'translated')
         );
         $this->assertCount(2, Http::recorded());
-        Http::assertSent(fn ($request) => $request['max_tokens'] === 768
+        Http::assertSent(fn ($request) => $request['max_tokens'] === 88
             && str_contains($request['messages'][1]['content'], '8. 八'));
+    }
+
+    public function test_it_splits_groq_batches_when_output_token_rate_limited(): void
+    {
+        config(['services.groq.key' => 'test-key']);
+
+        Http::fake([
+            'api.groq.com/*' => Http::sequence()
+                ->push([
+                    'error' => [
+                        'message' => 'Rate limit reached on output tokens per minute. Please try again in 3 seconds.',
+                    ],
+                ], 429)
+                ->push([
+                    'choices' => [
+                        ['message' => ['content' => "1. មួយ\n2. ពីរ"]],
+                    ],
+                ])
+                ->push([
+                    'choices' => [
+                        ['message' => ['content' => "1. បី\n2. បួន"]],
+                    ],
+                ]),
+        ]);
+
+        $translations = (new TranslateService())->translateBatch(['一', '二', '三', '四']);
+
+        $this->assertSame(['មួយ', 'ពីរ', 'បី', 'បួន'], array_column($translations, 'translated'));
+        $this->assertCount(3, Http::recorded());
     }
 
     public function test_it_retries_incomplete_groq_batches_as_smaller_requests(): void

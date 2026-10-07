@@ -38,7 +38,7 @@ const useVideoStore = create((set, get) => ({
   }),
 
   // Combined actions
-  async uploadVideo(file) {
+  async uploadVideo(file, videoName) {
     try {
       set({ 
         status: 'uploading', 
@@ -48,7 +48,7 @@ const useVideoStore = create((set, get) => ({
         uploadEtaSeconds: null,
       })
       
-      const response = await videoService.uploadVideo(file, (uploadProgress, metrics) => {
+      const response = await videoService.uploadVideo(file, videoName, (uploadProgress, metrics) => {
         set({
           uploadProgress,
           uploadSpeed: metrics.bytesPerSecond,
@@ -64,6 +64,7 @@ const useVideoStore = create((set, get) => ({
         uploadEtaSeconds: null,
         currentVideo: {
           id: responseData.video_id,
+          video_name: responseData.video_name,
           status: responseData.status,
         }
       })

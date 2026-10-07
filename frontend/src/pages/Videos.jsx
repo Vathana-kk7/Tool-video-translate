@@ -170,6 +170,7 @@ const Videos = () => {
                 <div className="mb-4">
                   <VideoPreview
                     videoUrl={video.final_video_url || video.original_video_url}
+                    posterUrl={video.thumbnail_url}
                     title={`Video #${video.id}`}
                     controls={false}
                   />
@@ -177,6 +178,9 @@ const Videos = () => {
 
                 {/* Video Info */}
                 <div className="space-y-3">
+                  <p className="font-semibold text-gray-900">
+                    {video.video_name || `Video #${video.id}`}
+                  </p>
                   <div className="flex justify-between items-start">
                     <div>
                       <p className="text-sm text-gray-500">

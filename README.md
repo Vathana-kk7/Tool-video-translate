@@ -6,11 +6,14 @@ A full-stack web application that translates Chinese speech in videos to natural
 
 - Upload MP4, AVI, MOV, MKV, WebM videos (max 500MB)
 - Automatic Chinese speech-to-text using OpenAI Whisper
-- Translation to Khmer using Google Translate
+- Translation to Khmer using Groq, with Gemini as an optional rate-limit fallback
 - Natural Khmer voice generation using Azure Text-to-Speech
-- Merge Khmer audio with original video using FFmpeg
+- Separate original speech from background audio with local Demucs, then mix the background under the Khmer voice
+- Show a representative video-frame thumbnail in the video library and result players
+- Merge Khmer audio with the original video using FFmpeg
 - Real-time processing status updates
 - Download translated videos
+- Name each upload (for example, an episode number) and see the label in My Videos and Result
 - Modern, responsive UI with Tailwind CSS
 
 ## 🛠️ Tech Stack
@@ -24,7 +27,9 @@ A full-stack web application that translates Chinese speech in videos to natural
 
 **AI Services**
 - OpenAI Whisper API (speech-to-text)
-- Google Translate API (translation)
+- Groq API (primary translation)
+- Gemini API (optional free-tier fallback)
+- Google Cloud Translation API (optional fallback)
 - Azure Cognitive Services TTS (text-to-speech)
 
 **Frontend (React)**
@@ -44,11 +49,13 @@ Before running the application, ensure you have:
 - **Composer** (dependency manager for PHP)
 - **Node.js 18+** and npm
 - **FFmpeg** installed and accessible in your PATH
+- **Python 3.10–3.12** with Demucs installed for local vocal/background separation
 - **MySQL 8+** database
 - **Redis** (for queue processing)
 - **API Keys**:
   - OpenAI API key (Whisper)
-  - Google Cloud Translation API key
+  - Groq API key (translation)
+  - Gemini API key (optional free-tier fallback)
   - Azure Cognitive Services TTS key
 
 ## 🚀 Installation
@@ -84,6 +91,9 @@ DB_PASSWORD=your_password
 
 # AI Services
 OPENAI_API_KEY=your_openai_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_TRANSLATION_MODEL=gemini-3.5-flash-lite
 GOOGLE_TRANSLATE_API_KEY=your_google_translate_api_key
 AZURE_TTS_KEY=your_azure_tts_key
 AZURE_TTS_REGION=eastasia
@@ -91,6 +101,10 @@ AZURE_TTS_REGION=eastasia
 # FFmpeg Paths (Windows)
 FFMPEG_PATH=C:\\ffmpeg\\bin\\ffmpeg.exe
 FFPROBE_PATH=C:\\ffmpeg\\bin\\ffprobe.exe
+
+# Local background-audio separation
+DEMUCS_PYTHON_PATH=C:\\path\\to\\python.exe
+DEMUCS_MODEL=htdemucs
 
 # Queue
 QUEUE_CONNECTION=database
@@ -157,6 +171,28 @@ npm run dev
    - Linux: `sudo apt install ffmpeg`
    - Mac: `brew install ffmpeg`
 
+### Demucs Setup
+
+The video merge step uses Demucs locally to separate speech from music and other background audio. Install it into a Python 3.10–3.12 environment:
+
+```bash
+python -m pip install demucs numpy
+```
+
+Set `DEMUCS_PYTHON_PATH` to that environment's Python executable in `.env`. Demucs downloads its model the first time it runs. The separated background is mixed under the Khmer voice, with a limiter to prevent clipping; the original Chinese speech track is not included in the output. On the Result page, choose a 0–100% background level and apply it to rebuild the downloadable video: 50% is unity gain (the separated background's original level), and 100% is 2× gain. If Demucs is missing or fails, processing reports an error rather than silently exporting a video without the background.
+
+### Gemini Free-Tier Translation Fallback
+
+When Groq returns HTTP 429, translation uses Gemini if `GEMINI_API_KEY` is configured:
+
+1. Sign in to [Google AI Studio](https://aistudio.google.com/apikey) with your Google account.
+2. Select or create a project, then choose **Create API key**.
+3. Confirm the project/model has free-tier access and check its current quota in AI Studio.
+4. Paste the key into the existing `GEMINI_API_KEY=` line in `.env` (do not send or commit the key).
+5. Restart the Laravel queue worker so it loads the new key.
+
+The default model is `gemini-3.5-flash-lite`; model availability and free-tier quotas can change. The fallback uses only the Gemini API when Groq responds with HTTP 429. Gemini rate-limit errors are retried by the queue.
+
 ### Queue Worker
 
 Start the queue worker to process videos in the background:
@@ -169,7 +205,7 @@ php artisan queue:work database --queue=high,default --sleep=2 --timeout=3600 --
 ### Laravel Development Server
 
 ```bash
-# On Windows, start the API and queue worker with the optimized upload temp directory
+# On Windows, start the API (5GB upload limit, no request timeout) and queue worker
 start-server.bat
 ```
 
@@ -201,10 +237,7 @@ curl http://localhost:8000/api/videos/1/status
 ### Development Mode
 
 **Terminal 1 - Laravel Backend:**
-```bash
-cd /path/to/laravel_php/tool_ai
-php artisan serve
-```
+On Windows, use `start-server.bat` instead of `php artisan serve` so the API server applies the 5GB upload limit required for large videos.
 
 **Terminal 2 - Queue Worker:**
 ```bash
@@ -348,8 +381,10 @@ chown -R www-data:www-data storage bootstrap/cache
 
 Be aware of API rate limits:
 - **OpenAI Whisper**: ~50 requests/hour for free tier
-- **Google Translate**: ~500,000 chars/month free
+- **Groq / Gemini**: Free tiers have provider-specific rate limits; translation uses Gemini when Groq returns HTTP 429 and a Gemini key is configured
+- **Google Translate**: Usage may be billable; check current Google Cloud pricing before enabling it
 - **Azure TTS**: 5M characters/month free
+- **Translation batching**: Groq requests use smaller batches and lower output-token limits; output-token rate limits split the batch before retrying.
 
 Consider implementing:
 - Request queuing with rate limiting
@@ -439,7 +474,7 @@ CREATE TABLE videos (
 1. **Upload** → Video saved to storage
 2. **Extract Audio** → FFmpeg extracts audio track
 3. **Transcribe** → OpenAI Whisper converts Chinese speech to text
-4. **Translate** → Google Translate converts Chinese to Khmer
+4. **Translate** → Groq converts Chinese to Khmer, with optional Gemini fallback when Groq is rate-limited
 5. **Generate Speech** → Azure TTS creates Khmer audio
 6. **Merge** → FFmpeg combines Khmer audio with original video
 7. **Results** → Final video ready for download

@@ -1,7 +1,25 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL
-  || `${window.location.protocol}//${window.location.hostname}:8000/api`
+const configuredApiUrl = import.meta.env.VITE_API_URL
+const configuredApi = configuredApiUrl
+  ? new URL(configuredApiUrl, window.location.href)
+  : new URL(`${window.location.protocol}//${window.location.hostname}:8000/api`)
+if (
+  ['localhost', '127.0.0.1'].includes(configuredApi.hostname)
+  && !['localhost', '127.0.0.1'].includes(window.location.hostname)
+) {
+  configuredApi.hostname = window.location.hostname
+}
+const API_BASE_URL = configuredApi.toString()
+const API_ORIGIN = new URL(API_BASE_URL, window.location.href).origin
+
+export const resolveMediaUrl = (url) => {
+  if (!url || /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(url)) {
+    return url || ''
+  }
+
+  return new URL(url, API_ORIGIN).toString()
+}
 
 const api = axios.create({
   baseURL: API_BASE_URL,

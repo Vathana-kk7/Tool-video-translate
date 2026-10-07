@@ -5,7 +5,10 @@ import useVideoStore from '../contexts/videoStore'
 
 const UploadCard = () => {
   const [isDragging, setIsDragging] = useState(false)
+  const [videoName, setVideoName] = useState('')
+  const [selectedFile, setSelectedFile] = useState(null)
   const { uploadVideo, status, uploadProgress, uploadSpeed, uploadEtaSeconds, currentVideo, error } = useVideoStore()
+  const isUploading = status === 'uploading' || status === 'processing'
 
   const uploadEstimate = uploadSpeed > 0
     ? `${(uploadSpeed / (1024 * 1024)).toFixed(1)} MB/s${
@@ -15,9 +18,20 @@ const UploadCard = () => {
 
   const onDrop = useCallback((acceptedFiles) => {
     if (acceptedFiles.length > 0) {
-      uploadVideo(acceptedFiles[0])
+      setSelectedFile(acceptedFiles[0])
     }
-  }, [uploadVideo])
+  }, [])
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    if (!selectedFile || !videoName.trim() || isUploading) return
+    uploadVideo(selectedFile, videoName.trim())
+      .then(() => {
+        setSelectedFile(null)
+        setVideoName('')
+      })
+      .catch(() => {})
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -26,6 +40,7 @@ const UploadCard = () => {
     },
     maxSize: 5 * 1024 * 1024 * 1024, // 5GB
     multiple: false,
+    disabled: isUploading,
     onDragEnter: () => setIsDragging(true),
     onDragLeave: () => setIsDragging(false),
   })
@@ -47,47 +62,87 @@ const UploadCard = () => {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <div
-        {...getRootProps()}
-        className={`dropzone cursor-pointer transition-all duration-200 ${
-          isDragActive ? 'dropzone-active scale-105' : ''
-        } ${status === 'uploading' || status === 'processing' ? 'pointer-events-none opacity-75' : ''}`}
-      >
-        <input {...getInputProps()} />
+      <form onSubmit={handleSubmit}>
+        <label htmlFor="video-name" className="block text-sm font-medium text-gray-700 mb-2">
+          Video name / episode number <span className="text-red-600">*</span>
+        </label>
+        <input
+          id="video-name"
+          type="text"
+          required
+          maxLength={255}
+          value={videoName}
+          onChange={(event) => setVideoName(event.target.value)}
+          placeholder="ឧ. ភាគទី 1"
+          disabled={isUploading}
+          className="w-full rounded-lg border border-gray-300 px-4 py-3 mb-4 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:bg-gray-100"
+        />
 
-        <div className="flex flex-col items-center space-y-4">
-          <div className={`p-4 rounded-full ${
-            isDragActive ? 'bg-primary-100' : 'bg-gray-100'
-          }`}>
-            <CloudArrowUpIcon className={`w-12 h-12 ${
-              isDragActive ? 'text-primary-600' : 'text-gray-400'
-            }`} />
-          </div>
+        <div
+          {...getRootProps()}
+          className={`dropzone cursor-pointer transition-all duration-200 ${
+            isDragActive ? 'dropzone-active scale-105' : ''
+          } ${isUploading ? 'pointer-events-none opacity-75' : ''}`}
+        >
+          <input {...getInputProps()} />
 
-          <div className="text-center">
-            <h3 className="text-lg font-semibold text-gray-700 mb-2">
-              {getStatusMessage()}
-            </h3>
-            <p className="text-sm text-gray-500">
-              Drag & drop your Chinese video file here, or click to select
-            </p>
-<p className="text-xs text-gray-400 mt-2">
-               Supported: MP4, AVI, MOV, MKV, WebM (max 5GB)
-             </p>
-          </div>
-
-          {status === 'uploading' && (
-            <div className="w-full max-w-xs">
-              <div className="progress-bar">
-                <div
-                  className="progress-bar-fill"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+          <div className="flex flex-col items-center space-y-4">
+            <div className={`p-4 rounded-full ${
+              isDragActive ? 'bg-primary-100' : 'bg-gray-100'
+            }`}>
+              {selectedFile ? (
+                <FilmIcon className="w-12 h-12 text-primary-600" />
+              ) : (
+                <CloudArrowUpIcon className={`w-12 h-12 ${
+                  isDragActive ? 'text-primary-600' : 'text-gray-400'
+                }`} />
+              )}
             </div>
-          )}
+
+            <div className="text-center">
+              <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                {selectedFile ? selectedFile.name : getStatusMessage()}
+              </h3>
+              <p className="text-sm text-gray-500">
+                {selectedFile
+                  ? 'Click or drop another video to replace this file'
+                  : 'Drag & drop your Chinese video file here, or click to select'}
+              </p>
+              <p className="text-xs text-gray-400 mt-2">
+                Supported: MP4, AVI, MOV, MKV, WebM (max 5GB)
+              </p>
+            </div>
+
+            {status === 'uploading' && (
+              <div className="w-full max-w-xs">
+                <div className="progress-bar">
+                  <div className="progress-bar-fill" style={{ width: `${uploadProgress}%` }} />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+
+        {selectedFile && !isUploading && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={!videoName.trim()}
+              className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Upload and translate
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedFile(null)}
+              className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100"
+            >
+              <XMarkIcon className="h-4 w-4" />
+              Remove video
+            </button>
+          </div>
+        )}
+      </form>
 
       {/* Processing indicator */}
       {status === 'processing' && (

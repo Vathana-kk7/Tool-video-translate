@@ -9,7 +9,17 @@ class Video extends Model
 {
     use HasFactory;
 
+    protected static function booted(): void
+    {
+        static::creating(function (Video $video) {
+            if ($video->background_audio_volume === null) {
+                $video->background_audio_volume = 50;
+            }
+        });
+    }
+
     protected $fillable = [
+        'video_name',
         'original_video',
         'extracted_audio',
         'transcribed_text',
@@ -20,6 +30,7 @@ class Video extends Model
         'status',
         'error_message',
         'progress',
+        'background_audio_volume',
         'user_id',
         'segments',
         'audio_segments',
@@ -29,6 +40,7 @@ class Video extends Model
         'segments' => 'array',
         'audio_segments' => 'array',
         'progress' => 'integer',
+        'background_audio_volume' => 'integer',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
@@ -38,6 +50,7 @@ class Video extends Model
         'final_video_url',
         'khmer_audio_url',
         'subtitle_url',
+        'thumbnail_url',
     ];
 
     public function user()
@@ -70,6 +83,15 @@ class Video extends Model
     {
         return $this->subtitle_file
             ? asset('storage/' . $this->subtitle_file)
+            : '';
+    }
+
+    public function getThumbnailUrlAttribute(): string
+    {
+        $thumbnailPath = storage_path('app/public/thumbnails/' . $this->id . '.jpg');
+
+        return is_file($thumbnailPath)
+            ? asset('storage/thumbnails/' . $this->id . '.jpg')
             : '';
     }
 

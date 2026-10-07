@@ -7,11 +7,15 @@ import SubtitleDisplay from '../components/SubtitleDisplay'
 import DownloadButton from '../components/DownloadButton'
 import StatusCard from '../components/StatusCard'
 import useVideoStore from '../contexts/videoStore'
+import videoService from '../services/videoService'
+import toast from 'react-hot-toast'
 
 const Result = () => {
   const { id } = useParams()
-  const { videoDetails, loadVideoDetails, error } = useVideoStore()
+  const { videoDetails, loadVideoDetails, setVideoDetails, error } = useVideoStore()
   const [loading, setLoading] = useState(true)
+  const [backgroundVolume, setBackgroundVolume] = useState(50)
+  const [applyingBackgroundVolume, setApplyingBackgroundVolume] = useState(false)
 
   useEffect(() => {
     if (id) {
@@ -20,6 +24,67 @@ const Result = () => {
         .catch(() => setLoading(false))
     }
   }, [id, loadVideoDetails])
+
+  useEffect(() => {
+    if (videoDetails?.id === Number(id) && videoDetails.background_audio_volume != null) {
+      setBackgroundVolume(videoDetails.background_audio_volume)
+    }
+  }, [id, videoDetails?.id, videoDetails?.background_audio_volume])
+
+  useEffect(() => {
+    if (!id || videoDetails?.status !== 'merging') return undefined
+
+    let active = true
+    let timeout
+    const poll = async () => {
+      try {
+        const response = await videoService.getStatus(id)
+        const statusData = response.data?.data ?? response.data
+        if (!active) return
+
+        if (statusData.status === 'completed' || statusData.status === 'failed') {
+          await loadVideoDetails(id)
+          if (applyingBackgroundVolume) {
+            if (statusData.error_message) {
+              toast.error(statusData.error_message)
+            } else if (statusData.status === 'completed') {
+              toast.success('Background audio updated. The downloaded video now uses this level.')
+            }
+            setApplyingBackgroundVolume(false)
+          }
+          return
+        }
+
+        timeout = setTimeout(poll, 3000)
+      } catch (pollError) {
+        if (active) {
+          toast.error(pollError.response?.data?.message || 'Could not check the audio update status.')
+          setApplyingBackgroundVolume(false)
+        }
+      }
+    }
+
+    poll()
+    return () => {
+      active = false
+      clearTimeout(timeout)
+    }
+  }, [id, videoDetails?.status, applyingBackgroundVolume, loadVideoDetails])
+
+  const applyBackgroundVolume = async () => {
+    setApplyingBackgroundVolume(true)
+    try {
+      await videoService.updateBackgroundAudio(id, backgroundVolume)
+      setVideoDetails({
+        ...videoDetails,
+        status: 'merging',
+        progress: 90,
+      })
+    } catch (applyError) {
+      setApplyingBackgroundVolume(false)
+      toast.error(applyError.response?.data?.message || 'Could not update the background audio.')
+    }
+  }
 
   if (loading) {
     return (
@@ -84,6 +149,7 @@ const Result = () => {
               <h2 className="text-gray-900 font-semibold text-lg mb-3">វីដេអូដើម</h2>
               <VideoPreview
                 videoUrl={videoDetails.original_video_url}
+                posterUrl={videoDetails.thumbnail_url}
                 title="កំពុងរង់ចាំ Processing..."
               />
             </div>
@@ -94,6 +160,11 @@ const Result = () => {
                 progress={videoDetails.progress}
                 error={videoDetails.error_message}
               />
+              {videoDetails.video_name && (
+                <p className="mt-4 text-center font-semibold text-gray-800">
+                  {videoDetails.video_name}
+                </p>
+              )}
             </div>
           </div>
         ) : (
@@ -108,6 +179,11 @@ const Result = () => {
                 </svg>
                 បំលែងបានជោគជ័យ!
               </div>
+              {videoDetails.video_name && (
+                <p className="text-lg font-semibold text-gray-800 mb-1">
+                  {videoDetails.video_name}
+                </p>
+              )}
               <h1 className="text-3xl font-bold text-gray-900">លទ្ធផលការបំលែង</h1>
               <p className="text-gray-500 mt-2">វីដេអូរបស់អ្នកត្រូវបានបំលែងទៅជាភាសាខ្មែរ</p>
             </div>
@@ -121,6 +197,7 @@ const Result = () => {
                 </h2>
                 <VideoPreview
                   videoUrl={videoDetails.original_video_url}
+                  posterUrl={videoDetails.thumbnail_url}
                   title="Original Chinese Video"
                 />
               </div>
@@ -133,6 +210,7 @@ const Result = () => {
                 {videoDetails.final_video_url ? (
                   <VideoPreview
                     videoUrl={videoDetails.final_video_url}
+                    posterUrl={videoDetails.thumbnail_url}
                     title="Translated Khmer Video"
                   />
                 ) : (
@@ -150,6 +228,52 @@ const Result = () => {
                 audioUrl={videoDetails.khmer_audio_url}
                 title="Generated Khmer Voice"
               />
+            </div>
+
+            {/* Background audio mix */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+              <h2 className="text-gray-900 font-semibold text-lg mb-2">🎼 សម្លេង Background</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                50% ស្មើកម្រិត Background ដើមក្នុងវីដេអូ។ 100% បង្កើនកម្រិតជា 2 ដង។ ចុច Apply ដើម្បីអនុវត្តទៅលើវីដេអូ Download។
+              </p>
+              {videoDetails.error_message && (
+                <p className="text-sm text-red-600 mb-3" role="alert">
+                  {videoDetails.error_message}
+                </p>
+              )}
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={backgroundVolume}
+                  onChange={(event) => setBackgroundVolume(Number(event.target.value))}
+                  aria-label="Background audio volume"
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-600"
+                />
+                <span className="w-12 text-right text-sm font-medium text-gray-700">
+                  {backgroundVolume}%
+                </span>
+              </div>
+              <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
+                <span>0% · បិទ</span>
+                <span>50% · កម្រិតដើម</span>
+                <span>កម្រិត Download បច្ចុប្បន្ន: {videoDetails.background_audio_volume ?? 50}%</span>
+                <span>100% · 2 ដង</span>
+              </div>
+              <button
+                type="button"
+                onClick={applyBackgroundVolume}
+                disabled={
+                  applyingBackgroundVolume
+                  || backgroundVolume === (videoDetails.background_audio_volume ?? 50)
+                  || videoDetails.status !== 'completed'
+                }
+                className="mt-4 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-medium transition"
+              >
+                {applyingBackgroundVolume ? 'កំពុងអនុវត្ត...' : 'Apply និងបង្កើតវីដេអូ Download'}
+              </button>
             </div>
 
             {/* Transcription */}

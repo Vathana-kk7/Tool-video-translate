@@ -73,29 +73,47 @@ class FFmpegService
     }
 
     /**
-     * Merge Khmer audio with original video
+     * Merge Khmer audio and the separated original background audio with the video.
      */
-    public function mergeAudioWithVideo(string $videoFilePath, string $audioFilePath): string
+    public function mergeAudioWithVideo(
+        string $videoFilePath,
+        string $audioFilePath,
+        int $backgroundVolume = 50
+    ): string
     {
+        $backgroundGain = self::backgroundGainForVolume($backgroundVolume);
+
+        $backgroundAudioPath = null;
+
         try {
             $outputFileName = 'translated_' . time() . '_' . pathinfo($videoFilePath, PATHINFO_FILENAME) . '.mp4';
             $outputFilePath = $this->processedPath . '/' . $outputFileName;
+            $backgroundAudioPath = (new BackgroundAudioSeparationService())
+                ->extractBackgroundAudio($videoFilePath);
 
             $cmd = sprintf(
-                '%s -i %s -i %s -c:v copy -c:a aac -strict experimental -map 0:v:0 -map 1:a:0 -shortest %s -y',
+                '%s -i %s -i %s -i %s -filter_complex %s -map 0:v:0 -map "[aout]" -c:v copy -c:a aac -b:a 192k -shortest %s -y',
                 env('FFMPEG_PATH', 'ffmpeg'),
                 escapeshellarg($videoFilePath),
+                escapeshellarg($backgroundAudioPath),
                 escapeshellarg($audioFilePath),
+                escapeshellarg(sprintf(
+                    '[1:a]volume=%.2f[bg];[bg][2:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]',
+                    $backgroundGain
+                )),
                 escapeshellarg($outputFilePath)
             );
 
-            exec($cmd, $output, $returnCode);
+            exec($cmd . ' 2>&1', $output, $returnCode);
 
             if ($returnCode !== 0) {
-                throw new \Exception('FFmpeg merge failed with exit code: ' . $returnCode);
+                throw new \RuntimeException(
+                    'FFmpeg merge failed with exit code: ' . $returnCode . ': '
+                    . implode("\n", array_slice($output, -10))
+                );
             }
 
-            if (!file_exists($outputFilePath)) {
+            if (!file_exists($outputFilePath) || filesize($outputFilePath) === 0) {
                 throw new \Exception('Merged video file was not created');
             }
 
@@ -114,6 +132,61 @@ class FFmpegService
                 'audio_file' => $audioFilePath,
             ]);
             throw $e;
+        } finally {
+            if ($backgroundAudioPath !== null && file_exists($backgroundAudioPath)) {
+                unlink($backgroundAudioPath);
+            }
+        }
+    }
+
+    public static function backgroundGainForVolume(int $backgroundVolume): float
+    {
+        if ($backgroundVolume < 0 || $backgroundVolume > 100) {
+            throw new \InvalidArgumentException('Background volume must be between 0 and 100.');
+        }
+
+        return $backgroundVolume / 50;
+    }
+
+    public function generateThumbnail(string $videoFilePath, string $outputPath): string
+    {
+        $directory = dirname($outputPath);
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException("Unable to create video thumbnail directory: {$directory}");
+        }
+
+        $this->runThumbnailCommand($videoFilePath, $outputPath, '00:00:01.000');
+        if (!is_file($outputPath) || filesize($outputPath) === 0) {
+            $this->runThumbnailCommand($videoFilePath, $outputPath, '00:00:00.000');
+        }
+
+        if (!is_file($outputPath) || filesize($outputPath) === 0) {
+            throw new \RuntimeException('FFmpeg did not create a usable video thumbnail.');
+        }
+
+        return $outputPath;
+    }
+
+    private function runThumbnailCommand(string $videoFilePath, string $outputPath, string $seek): void
+    {
+        $command = sprintf(
+            '%s -ss %s -i %s -frames:v 1 -vf %s -q:v 3 %s -y',
+            env('FFMPEG_PATH', 'ffmpeg'),
+            $seek,
+            escapeshellarg($videoFilePath),
+            escapeshellarg('scale=640:-2'),
+            escapeshellarg($outputPath)
+        );
+        $output = [];
+        $returnCode = null;
+        exec($command . ' 2>&1', $output, $returnCode);
+
+        if ($returnCode !== 0) {
+            Log::warning('Video thumbnail extraction attempt failed', [
+                'video_file' => $videoFilePath,
+                'seek' => $seek,
+                'output' => implode("\n", array_slice($output, -5)),
+            ]);
         }
     }
 

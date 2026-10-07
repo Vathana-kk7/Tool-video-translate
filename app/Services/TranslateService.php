@@ -23,6 +23,10 @@ class TranslateService
             return $this->translateGroqBatch([$text])[0];
         }
 
+        if (config('services.gemini.key')) {
+            return $this->translateGeminiBatch([$text])[0];
+        }
+
         if (config('services.google_translate.key')) {
             return $this->translateGoogleBatch([$text])[0];
         }
@@ -40,6 +44,11 @@ class TranslateService
     private function translateGroqBatch(array $sentences): array
     {
         return array_column($this->translateGroqSegments($sentences), 'translated');
+    }
+
+    private function translateGeminiBatch(array $sentences): array
+    {
+        return array_column($this->translateGeminiSegments($sentences), 'translated');
     }
 
     private function translateGroqSegments(array $sentences): array
@@ -90,10 +99,15 @@ class TranslateService
             $numberedTexts[] = ($index + 1) . '. ' . preg_replace('/\s+/u', ' ', $item['text']);
         }
 
+        $maxOutputTokens = array_sum(array_map(
+            static fn ($item) => mb_strlen($item['text'], 'UTF-8') * 3 + 8,
+            $batch
+        ));
+
         $payload = [
                 'model' => config('services.groq.translation_model'),
                 'temperature' => 0,
-                'max_tokens' => min(768, max(128, count($batch) * 96)),
+                'max_tokens' => min(768, max(32, $maxOutputTokens)),
                 'messages' => [
                     [
                         'role' => 'system',
@@ -110,8 +124,25 @@ class TranslateService
         if (!$response->successful()) {
             $message = $response->json('error.message', 'Unknown Groq translation error');
             if ($response->status() === 429) {
+                if (config('services.gemini.key')) {
+                    $this->translateGeminiChunk($batch, $result);
+
+                    return;
+                }
+
+                $isOutputTokenLimit = str_contains(strtolower($message), 'output tokens per minute')
+                    || str_contains(strtolower($message), 'otpm');
+
+                if ($isOutputTokenLimit && count($batch) > 1) {
+                    foreach (array_chunk($batch, (int) ceil(count($batch) / 2)) as $smallerBatch) {
+                        $this->translateGroqChunk($smallerBatch, $result);
+                    }
+
+                    return;
+                }
+
                 $retryAfter = $this->retryAfterSeconds($response);
-                if (str_contains(strtolower($message), 'output tokens per minute')) {
+                if ($isOutputTokenLimit) {
                     $retryAfter = max(60, $retryAfter);
                 }
 
@@ -156,6 +187,121 @@ class TranslateService
 
                 $this->translateGroqChunk([$item], $result);
                 continue;
+            }
+
+            $result[$item['index']] = $translations[$position];
+        }
+    }
+
+    private function translateGeminiSegments(array $sentences): array
+    {
+        $result = [];
+        $batch = [];
+
+        foreach ($sentences as $index => $sentence) {
+            $sentence = trim((string) $sentence);
+            if ($sentence === '') {
+                $result[$index] = '';
+                continue;
+            }
+
+            if (count($batch) >= 4) {
+                $this->translateGeminiChunk($batch, $result);
+                $batch = [];
+            }
+
+            $batch[] = ['index' => $index, 'text' => $sentence];
+        }
+
+        if ($batch) {
+            $this->translateGeminiChunk($batch, $result);
+        }
+
+        ksort($result);
+
+        return array_map(
+            static fn ($index, $text) => [
+                'index' => $index,
+                'original' => $sentences[$index],
+                'translated' => $text,
+            ],
+            array_keys($result),
+            array_values($result)
+        );
+    }
+
+    private function translateGeminiChunk(array $batch, array &$result): void
+    {
+        $numberedTexts = [];
+        foreach ($batch as $index => $item) {
+            $numberedTexts[] = ($index + 1) . '. ' . preg_replace('/\s+/u', ' ', $item['text']);
+        }
+
+        $maxOutputTokens = array_sum(array_map(
+            static fn ($item) => mb_strlen($item['text'], 'UTF-8') * 3 + 8,
+            $batch
+        ));
+        $model = config('services.gemini.translation_model');
+        $response = Http::timeout(90)
+            ->withHeaders(['x-goog-api-key' => config('services.gemini.key')])
+            ->post(
+                'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($model) . ':generateContent',
+                [
+                    'systemInstruction' => [
+                        'parts' => [[
+                            'text' => 'Translate each numbered Chinese speech line into natural Khmer written in Khmer script (Unicode U+1780-U+17FF), never Thai. Reply with exactly one line per input in the same order, keeping the same number followed by a period. Do not add explanations or omit any line.',
+                        ]],
+                    ],
+                    'contents' => [[
+                        'role' => 'user',
+                        'parts' => [['text' => implode("\n", $numberedTexts)]],
+                    ]],
+                    'generationConfig' => [
+                        'temperature' => 0,
+                        'maxOutputTokens' => min(768, max(32, $maxOutputTokens)),
+                    ],
+                ]
+            );
+
+        if (!$response->successful()) {
+            $message = $response->json('error.message', 'Unknown Gemini translation error');
+            if ($response->status() === 429) {
+                throw new TranslationRateLimitException(
+                    'Gemini translation free-tier rate limit reached. Processing will retry automatically. ' . $message,
+                    max(5, $this->retryAfterSeconds($response))
+                );
+            }
+
+            throw new \RuntimeException(
+                'Gemini translation returned HTTP ' . $response->status() . ': ' . $message
+            );
+        }
+
+        $parts = $response->json('candidates.0.content.parts', []);
+        $content = implode('', array_map(
+            static fn ($part) => is_string($part['text'] ?? null) ? $part['text'] : '',
+            is_array($parts) ? $parts : []
+        ));
+        if (trim($content) === '') {
+            throw new \RuntimeException('Gemini returned an empty translation.');
+        }
+
+        $translations = $this->parseGroqTranslations($content, count($batch));
+        if ($translations === null) {
+            if (count($batch) === 1) {
+                $translations = [trim(preg_replace('/^\s*1[.)]\s*/u', '', trim($content)))];
+            } else {
+                foreach (array_chunk($batch, (int) ceil(count($batch) / 2)) as $smallerBatch) {
+                    $this->translateGeminiChunk($smallerBatch, $result);
+                }
+
+                return;
+            }
+        }
+
+        foreach ($batch as $position => $item) {
+            if ($translations[$position] === '' || !$this->containsKhmerScript($translations[$position])) {
+                throw new \RuntimeException('Gemini returned an empty translation or text outside Khmer script.');
             }
 
             $result[$item['index']] = $translations[$position];
@@ -285,6 +431,10 @@ class TranslateService
     {
         if (config('services.groq.key')) {
             return $this->translateGroqSegments($sentences);
+        }
+
+        if (config('services.gemini.key')) {
+            return $this->translateGeminiSegments($sentences);
         }
 
         if (config('services.google_translate.key')) {

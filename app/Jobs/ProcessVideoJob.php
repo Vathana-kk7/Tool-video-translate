@@ -77,6 +77,25 @@ class ProcessVideoJob implements ShouldQueue
 
     protected function extractAudio(Video $video): void
     {
+        $ffmpegService = new FFmpegService();
+        $originalPath = storage_path('app/public/' . $video->original_video);
+
+        if (!file_exists($originalPath)) {
+            throw new \Exception('Original video file not found');
+        }
+
+        $thumbnailPath = storage_path('app/public/thumbnails/' . $video->id . '.jpg');
+        if (!is_file($thumbnailPath) || filesize($thumbnailPath) === 0) {
+            try {
+                $ffmpegService->generateThumbnail($originalPath, $thumbnailPath);
+            } catch (\Throwable $e) {
+                Log::warning('Video thumbnail generation failed; continuing video processing.', [
+                    'video_id' => $video->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         $audioPath = $video->extracted_audio
             ? storage_path('app/' . $video->extracted_audio)
             : null;
@@ -86,13 +105,6 @@ class ProcessVideoJob implements ShouldQueue
         }
 
         $video->update(['status' => 'extracting_audio', 'progress' => 10]);
-
-        $ffmpegService = new FFmpegService();
-        $originalPath = storage_path('app/public/' . $video->original_video);
-
-        if (!file_exists($originalPath)) {
-            throw new \Exception('Original video file not found');
-        }
 
         $audioPath = $ffmpegService->extractAudio($originalPath);
         $relativeAudioPath = str_replace(storage_path('app/'), '', $audioPath);
@@ -165,7 +177,7 @@ class ProcessVideoJob implements ShouldQueue
                 }
             }
 
-            $batches = array_chunk($pendingIndexes, 8);
+            $batches = array_chunk($pendingIndexes, 4);
             foreach ($batches as $batchIndex => $indexes) {
                 $translatedSegments = $translateService->translateBatch(
                     array_map(fn ($index) => $segments[$index]['text'] ?? '', $indexes)
@@ -266,7 +278,11 @@ class ProcessVideoJob implements ShouldQueue
             throw new \Exception('Khmer audio file not found');
         }
 
-        $finalVideoPath = $ffmpegService->mergeAudioWithVideo($originalVideoPath, $khmerAudioPath);
+        $finalVideoPath = $ffmpegService->mergeAudioWithVideo(
+            $originalVideoPath,
+            $khmerAudioPath,
+            (int) ($video->background_audio_volume ?? 50)
+        );
 
         $publicPath = storage_path('app/public/');
         $relativeVideoPath = str_replace('\\', '/', str_replace($publicPath, '', $finalVideoPath));

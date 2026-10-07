@@ -1,5 +1,6 @@
 const VideoPreview = ({ 
   videoUrl, 
+  posterUrl = '',
   title = 'Video Preview', 
   controls = true,
   autoPlay = false 
@@ -25,7 +26,7 @@ const VideoPreview = ({
           autoPlay={autoPlay}
           className="w-full max-h-[500px] mx-auto"
           preload="metadata"
-          poster=""
+          poster={posterUrl || undefined}
         >
           <source src={videoUrl} type="video/mp4" />
           <source src={videoUrl} type="video/webm" />
