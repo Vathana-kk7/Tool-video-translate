@@ -184,6 +184,38 @@ class TranslateServiceTest extends TestCase
             && $request->hasHeader('x-goog-api-key', 'gemini-test-key'));
     }
 
+    public function test_it_retries_invalid_gemini_batch_lines_individually(): void
+    {
+        config([
+            'services.groq.key' => null,
+            'services.gemini.key' => 'gemini-test-key',
+        ]);
+
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::sequence()
+                ->push([
+                    'candidates' => [[
+                        'content' => ['parts' => [[
+                            'text' => "1. សួស្តី\n2. លាហើយ\n3. 好啊\n4. អរគុណ",
+                        ]]],
+                    ]],
+                ])
+                ->push([
+                    'candidates' => [[
+                        'content' => ['parts' => [['text' => '1. បាន']]],
+                    ]],
+                ]),
+        ]);
+
+        $translations = (new TranslateService())->translateBatch(['你好', '再见', '好啊', '谢谢']);
+
+        $this->assertSame(
+            ['សួស្តី', 'លាហើយ', 'បាន', 'អរគុណ'],
+            array_column($translations, 'translated')
+        );
+        $this->assertCount(2, Http::recorded());
+    }
+
     public function test_it_retries_when_gemini_free_tier_is_rate_limited(): void
     {
         config([

@@ -177,12 +177,18 @@ class TranslateService
 
         foreach ($batch as $position => $item) {
             if ($translations[$position] === '') {
-                throw new \RuntimeException('Groq returned an empty translation.');
+                throw new TranslationRateLimitException(
+                    'Groq returned an empty translation. Processing will retry automatically.',
+                    60
+                );
             }
 
             if (!$this->containsKhmerScript($translations[$position])) {
                 if (count($batch) === 1) {
-                    throw new \RuntimeException('Groq returned a translation outside Khmer script.');
+                    throw new TranslationRateLimitException(
+                        'Groq returned a translation outside Khmer script. Processing will retry automatically.',
+                        60
+                    );
                 }
 
                 $this->translateGroqChunk([$item], $result);
@@ -301,7 +307,15 @@ class TranslateService
 
         foreach ($batch as $position => $item) {
             if ($translations[$position] === '' || !$this->containsKhmerScript($translations[$position])) {
-                throw new \RuntimeException('Gemini returned an empty translation or text outside Khmer script.');
+                if (count($batch) > 1) {
+                    $this->translateGeminiChunk([$item], $result);
+                    continue;
+                }
+
+                throw new TranslationRateLimitException(
+                    'Gemini returned an empty translation or text outside Khmer script. Processing will retry automatically.',
+                    60
+                );
             }
 
             $result[$item['index']] = $translations[$position];
